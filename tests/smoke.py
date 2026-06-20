@@ -63,6 +63,10 @@ def main():
     check("inside C:/Work allowed", lambda: ensure_within(work))
     check("outside blocked", lambda: expect_raises(PermissionError, lambda: ensure_within(r"C:\Windows\x")))
     check("traversal blocked", lambda: expect_raises(PermissionError, lambda: ensure_within(r"C:\Work\sub\..\..\Windows\evil")))
+    check("oauth db blocked from file tools", lambda: expect_raises(PermissionError, lambda: ensure_within(os.environ["MCP_OAUTH_DB"])))
+    check("memory db blocked from file tools", lambda: expect_raises(PermissionError, lambda: ensure_within(os.environ["MCP_MEMORY_DB"])))
+    _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    check("project data dir blocked", lambda: expect_raises(PermissionError, lambda: ensure_within(os.path.join(_proj, "data", "probe.db"))))
 
     print("file ops")
     check("write+read", lambda: (fo.write_file_content(f1, "import os\n\ndef foo():\n    return 1\n"),
@@ -113,6 +117,14 @@ def main():
 
     print("cloudflare client")
     check("cf missing config -> error", lambda: expect_raises(cf.CFConfigError, lambda: cf.verify_token(config_ref=os.path.join(_TMP, "none.json"))))
+
+    print("http_probe SSRF guard")
+    from src.net.fetch import _guard_public_url  # noqa: E402
+    check("blocks loopback", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://127.0.0.1/")))
+    check("blocks cloud metadata", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://169.254.169.254/latest/meta-data/")))
+    check("blocks private LAN", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://10.0.0.1/")))
+    check("blocks non-http scheme", lambda: expect_raises(ValueError, lambda: _guard_public_url("file:///C:/Windows/x")))
+    check("allows public literal ip", lambda: _guard_public_url("http://8.8.8.8/"))
 
     print("oauth")
     check("oauth flow gates MCP (401 anon, 200 with token)", _check_oauth_flow)
