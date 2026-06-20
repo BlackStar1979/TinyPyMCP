@@ -1,5 +1,14 @@
 # TinyPyMCP
 
+> ⚠️ **OPERATOR-ONLY / AUTHENTICATED ADMIN SERVER.** TinyPyMCP exposes
+> `run_command` (allowlisted local code execution) and Cloudflare cloud-admin
+> tools. The in-process `path_guard` is **not** an OS security boundary — a
+> compromised or prompt-injected authenticated caller can run code with the
+> server process's privileges. Run it only behind auth (bearer/OAuth), only for
+> a trusted operator, never as an open/multi-tenant public connector. Before any
+> exposure, harden at the OS level: low-privilege user, filesystem ACLs, and
+> ideally a container (see DEVNOTES "Hardening Tier 2"). Audit: 2026-06-20.
+
 A Python MCP server: a sandboxed workshop for an agent — file read/edit, code
 intelligence, search index, local command execution, package lookups, persistent
 memory, and a client for bounded VPS channels. All filesystem access is confined

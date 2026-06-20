@@ -786,13 +786,13 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True,
         )
     )
-    def vps_status(
-        config_ref: Annotated[str | None, Field(description="Path to the channel config JSON. Omit to use the default (MCP_VPS_CONFIG or secrets/vps-channel.json).")] = None,
-    ) -> dict[str, Any]:
+    def vps_status() -> dict[str, Any]:
         """GET /v1/status on the configured bounded VPS channel. Credentials
         (Cloudflare Access service token / bearer) are read from the config file
-        on disk, never passed here. Use to confirm the channel is reachable."""
-        return vps_call_op("GET", "/v1/status", None, config_ref)
+        on disk, never passed here. Use to confirm the channel is reachable.
+        The config path is fixed server-side (MCP_VPS_CONFIG / default), not a
+        tool argument, to avoid a confused-deputy / file-existence oracle."""
+        return vps_call_op("GET", "/v1/status", None, None)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -804,13 +804,13 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         method: Annotated[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], Field(description="HTTP method.")],
         path: Annotated[str, Field(description="Path on the channel, e.g. '/v1/exec/run' or '/v1/compose/demo/up'. Appended to the configured base_url.", min_length=1)],
         body: Annotated[dict[str, Any] | None, Field(description="Optional JSON body.")] = None,
-        config_ref: Annotated[str | None, Field(description="Path to the channel config JSON. Omit for the default.")] = None,
     ) -> dict[str, Any]:
         """Make an authenticated request to the configured bounded VPS channel
         (router or deploy). The path is appended to the channel's base_url, so
         only that one host is reachable. Credentials come from the config file on
-        disk — never from arguments. The server enforces what operations exist."""
-        return vps_call_op(method, path, body, config_ref)
+        disk — never from arguments. The config path is fixed server-side, not a
+        tool argument. The server enforces what operations exist."""
+        return vps_call_op(method, path, body, None)
 
     # ── Cloudflare admin (token from ~/.romion/cloudflare.json, never an arg) ──
 
@@ -1067,6 +1067,11 @@ def main() -> None:
         default=None,
         help='Bearer mode: JSON file with {"token": "..."}.',
     )
+    parser.add_argument(
+        "--allow-query-token",
+        action="store_true",
+        help="Bearer mode: also accept ?token= in the URL (for connectors that can't send headers, e.g. ChatGPT). Off by default — the token can leak into proxy/browser logs.",
+    )
     args = parser.parse_args()
 
     import json as _json
@@ -1141,9 +1146,10 @@ def main() -> None:
                 print("[TinyPyMCP] REFUSING TO START: no bearer token.")
                 print("[TinyPyMCP] Use --token-file <json>, MCP_AUTH_TOKEN=<secret>, --auth oauth, or --auth none.")
                 raise SystemExit(2)
+            allow_qt = args.allow_query_token or os.environ.get("MCP_ALLOW_QUERY_TOKEN", "").strip().lower() in ("1", "true", "yes", "on")
             from src.auth_middleware import BearerAuthMiddleware
-            app.add_middleware(BearerAuthMiddleware, token=token)
-            print(f"[TinyPyMCP] Bearer auth ENABLED on {path}")
+            app.add_middleware(BearerAuthMiddleware, token=token, allow_query_token=allow_qt)
+            print(f"[TinyPyMCP] Bearer auth ENABLED on {path}" + (" (+ ?token= query accepted)" if allow_qt else " (header-only)"))
 
         rl = int(os.environ.get("MCP_RATE_LIMIT_PER_MIN", "0") or 0)
         if rl > 0:

@@ -128,6 +128,7 @@ def main():
 
     print("oauth")
     check("oauth flow gates MCP (401 anon, 200 with token)", _check_oauth_flow)
+    check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
     check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 50))
@@ -168,6 +169,34 @@ def _check_oauth_flow():
                     "client_id": cid, "code_verifier": v}).json()["access_token"]
         assert_true(c.post("/mcp/v5", json=INIT, headers=ACC).status_code == 401)
         assert_true(c.post("/mcp/v5", json=INIT, headers={**ACC, "Authorization": f"Bearer {at}"}).status_code == 200)
+
+
+def _check_query_token_gate():
+    import asyncio
+
+    from src.auth_middleware import BearerAuthMiddleware
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    async def status_for(mw):
+        scope = {"type": "http", "headers": [], "query_string": b"token=SEKRET"}
+        seen = []
+
+        async def send(m):
+            if m["type"] == "http.response.start":
+                seen.append(m["status"])
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await mw(scope, receive, send)
+        return seen[0]
+
+    off = asyncio.run(status_for(BearerAuthMiddleware(app, "SEKRET", allow_query_token=False)))
+    on = asyncio.run(status_for(BearerAuthMiddleware(app, "SEKRET", allow_query_token=True)))
+    assert_true(off == 401 and on == 200)
 
 
 def _check_env_sanitized():
