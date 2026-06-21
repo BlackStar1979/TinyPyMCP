@@ -8,6 +8,7 @@ dependencies = [
     "mcp>=1.2.0",   # FastMCP support
     "httpx>=0.27",
     "ovh>=1.1",     # OVHcloud API (host layer: snapshots/backups/reboot) — lazy-imported
+    "uptime-kuma-api>=1.0",  # Uptime Kuma (status monitors) — lazy-imported
 ]
 
 [project.scripts]

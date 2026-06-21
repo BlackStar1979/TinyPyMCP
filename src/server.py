@@ -106,14 +106,20 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         except Exception:
             pass
 
-    # TODO: Implement proper Sampling handler + advanced async session lifecycle
-    # This is the main area we need to expand for full Streamable HTTP + Sampling support.
-
-    # Placeholder for future Sampling implementation
-    # When ready, we will add:
-    # - @mcp.sampling() or custom handler for sampling/createMessage
-    # - Better async context management for long tool executions
-    # - Progress notifications and cancellable tasks
+    # Roadmap (aligned to the sessionless MCP direction — SEP-2567/2575, RC 2026-07-28):
+    # the transport is already STATELESS (stateless_http=True, no Mcp-Session-Id), and
+    # cross-call state is carried by the memory layer as explicit application-level
+    # handles (memory_set_state's session_id) — exactly the explicit-state-handle
+    # pattern that replaces transport sessions. So we deliberately do NOT build an
+    # "advanced HTTP session lifecycle"; that is the thing the spec is removing.
+    #
+    # Open items, in priority order:
+    # - Active cancellation for long tools (run_command/clone_repo/build_index/
+    #   vps_request): honor client disconnect -> propagate cancel; keep timeout as the
+    #   safety net. (Mirrors the mcp-tests D6 decision.)
+    # - Optional Sampling handler (sampling/createMessage) + progress notifications,
+    #   only if/when a client needs them. SSE transport is legacy/deprecated; prod runs
+    #   streamable-http.
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -787,13 +793,15 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True,
         )
     )
-    def vps_status() -> dict[str, Any]:
+    def vps_status(
+        channel: Annotated[str | None, Field(description="Channel name (e.g. 'router' or 'deploy'); omit for the configured default.")] = None,
+    ) -> dict[str, Any]:
         """GET /v1/status on the configured bounded VPS channel. Credentials
         (Cloudflare Access service token / bearer) are read from the config file
         on disk, never passed here. Use to confirm the channel is reachable.
         The config path is fixed server-side (MCP_VPS_CONFIG / default), not a
         tool argument, to avoid a confused-deputy / file-existence oracle."""
-        return vps_call_op("GET", "/v1/status", None, None)
+        return vps_call_op("GET", "/v1/status", None, channel)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -805,13 +813,14 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         method: Annotated[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], Field(description="HTTP method.")],
         path: Annotated[str, Field(description="Path on the channel, e.g. '/v1/exec/run' or '/v1/compose/demo/up'. Appended to the configured base_url.", min_length=1)],
         body: Annotated[dict[str, Any] | None, Field(description="Optional JSON body.")] = None,
+        channel: Annotated[str | None, Field(description="Channel name: 'router' (default) or 'deploy' (release plane). Omit for the configured default.")] = None,
     ) -> dict[str, Any]:
         """Make an authenticated request to the configured bounded VPS channel
         (router or deploy). The path is appended to the channel's base_url, so
         only that one host is reachable. Credentials come from the config file on
         disk — never from arguments. The config path is fixed server-side, not a
         tool argument. The server enforces what operations exist."""
-        return vps_call_op(method, path, body, None)
+        return vps_call_op(method, path, body, channel)
 
     # ── Cloudflare admin (token from ~/.romion/cloudflare.json, never an arg) ──
 
@@ -1102,6 +1111,114 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             return {"dry_run": True, "would": "reboot", "warn": "reboots the whole host", "note": "set confirm=true to apply"}
         audit("ovh_reboot", {})
         return ovhc.reboot()
+
+    # --- Uptime Kuma (status.romionologic.dev; read in read_only, manage in cloud_admin) ---
+    from src import kuma_client as kumac
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma list monitors", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_list_monitors() -> dict[str, Any]:
+        """List Uptime Kuma monitors (id/name/url/type/active). Read-only."""
+        return kumac.list_monitors()
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma monitor status", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_monitor_status() -> dict[str, Any]:
+        """Latest heartbeat status per monitor (0=down, 1=up, 2=pending, 3=maintenance). Read-only."""
+        return kumac.monitor_status()
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma add monitor", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def kuma_add_monitor(
+        name: Annotated[str, Field(description="Monitor name.")],
+        url: Annotated[str, Field(description="URL to monitor.")],
+        interval: Annotated[int, Field(description="Check interval (seconds).")] = 60,
+        accepted_statuscodes: Annotated["list[str] | None", Field(description="Accepted HTTP status ranges, e.g. ['200-299'] or ['401']. Default 200-299.")] = None,
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Add an HTTP monitor to Uptime Kuma. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "add_monitor", "name": name, "url": url, "note": "set confirm=true to apply"}
+        audit("kuma_add_monitor", {"name": name, "url": url})
+        return kumac.add_monitor(name, url, interval=interval, accepted_statuscodes=accepted_statuscodes)
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma pause monitor", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_pause_monitor(
+        monitor_id: Annotated[int, Field(description="Monitor id (from kuma_list_monitors).")],
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Pause a Kuma monitor. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "pause_monitor", "monitor_id": monitor_id, "note": "set confirm=true to apply"}
+        audit("kuma_pause_monitor", {"monitor_id": monitor_id})
+        return kumac.pause_monitor(monitor_id)
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma resume monitor", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_resume_monitor(
+        monitor_id: Annotated[int, Field(description="Monitor id (from kuma_list_monitors).")],
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Resume a paused Kuma monitor. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "resume_monitor", "monitor_id": monitor_id, "note": "set confirm=true to apply"}
+        audit("kuma_resume_monitor", {"monitor_id": monitor_id})
+        return kumac.resume_monitor(monitor_id)
+
+    # --- GitHub (REST API via token; reads in read_only, PR mutations in cloud_admin) ---
+    from src import github_client as ghc
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub repo info", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def gh_repo_info(
+        owner: Annotated["str | None", Field(description="Repo owner. Omit to use the config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit to use the config default.")] = None,
+    ) -> dict[str, Any]:
+        """Get repo info (full_name/default_branch/private/url/description). Read-only."""
+        return ghc.repo_info(owner, repo)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub list PRs", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def gh_list_prs(
+        state: Annotated[str, Field(description="open | closed | all.")] = "open",
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+    ) -> dict[str, Any]:
+        """List pull requests (number/title/state/head/base/url). Read-only."""
+        return ghc.list_prs(owner, repo, state=state)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub get PR", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def gh_get_pr(
+        number: Annotated[int, Field(description="PR number.")],
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+    ) -> dict[str, Any]:
+        """Get one pull request. Read-only."""
+        return ghc.get_pr(number, owner, repo)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub create PR", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def gh_create_pr(
+        title: Annotated[str, Field(description="PR title.")],
+        head: Annotated[str, Field(description="Source branch (the branch with changes).")],
+        base: Annotated[str, Field(description="Target branch.")] = "main",
+        body: Annotated[str, Field(description="PR description (Markdown).")] = "",
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Open a pull request (head -> base). Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "create_pr", "title": title, "head": head, "base": base, "note": "set confirm=true to apply"}
+        audit("gh_create_pr", {"title": title, "head": head, "base": base, "repo": repo})
+        return ghc.create_pr(title, head, base=base, body=body, owner=owner, repo=repo)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub merge PR", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def gh_merge_pr(
+        number: Annotated[int, Field(description="PR number to merge.")],
+        method: Annotated[str, Field(description="merge | squash | rebase.")] = "squash",
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Merge a pull request. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "merge_pr", "number": number, "method": method, "note": "set confirm=true to apply"}
+        audit("gh_merge_pr", {"number": number, "method": method, "repo": repo})
+        return ghc.merge_pr(number, method=method, owner=owner, repo=repo)
 
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login

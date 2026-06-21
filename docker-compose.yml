@@ -4,6 +4,10 @@
 # Secrets are NEVER baked into the image: the operator provisions them ONCE on
 # the VPS host and they are injected here (env_file) / mounted read-only
 # (/secrets). The agent never sees them; they never leave the VPS.
+name: tinypymcp   # stable compose project name across releases (per-release dir
+                  # would otherwise namespace the project by sha → orphan
+                  # containers + per-release volumes losing data).
+
 services:
   tinypymcp:
     build:
@@ -30,6 +34,8 @@ services:
       MCP_CF_CONFIG: /secrets/cloudflare.json
       MCP_OVH_CONFIG: /secrets/ovh.json
       MCP_VPS_CONFIG: /secrets/vps-channel.json
+      MCP_KUMA_CONFIG: /secrets/kuma.json
+      MCP_GITHUB_CONFIG: /secrets/github.json
       MCP_PUBLIC_HOST: tiny-py-mcp.romionologic.dev
       MCP_RATE_LIMIT_PER_MIN: "120"
 
@@ -44,6 +50,8 @@ services:
       - python
       - -m
       - src.server
+      - --host
+      - 0.0.0.0
       - --auth
       - oauth
       - --transport
@@ -53,10 +61,24 @@ services:
       - --profile
       - read_only,operator_admin,cloud_admin
 
-    # Local only; the VPS cloudflared tunnel fronts this and adds TLS/public host.
-    ports:
-      - "127.0.0.1:8765:8765"
+    # The VPS cloudflared (on romion_llm_llm_edge) reaches this by container name
+    # (tinypymcp:8765) and fronts it with TLS + the public host. Internal-only;
+    # no host port bind.
+    expose:
+      - "8765"
+    networks:
+      - llm_edge
+      - kuma_net
 
 volumes:
   tinypymcp-data:
   tinypymcp-work:
+
+networks:
+  llm_edge:
+    external: true
+    name: romion_llm_llm_edge   # same network as romion-deploy / romion-llm-cloudflared
+  kuma_net:
+    external: true
+    name: romion-net            # legacy bridge hosting uptime-kuma; lets kuma_* reach
+                                # http://uptime-kuma:3101 internally (no CF Access in path)

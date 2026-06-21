@@ -38,7 +38,7 @@ import httpx
 # Outside C:\Work on purpose, so the agent's sandboxed file tools cannot read it.
 _DEFAULT_CONFIG = Path.home() / ".romion" / "vps-channel.json"
 DEFAULT_TIMEOUT = 30
-MAX_TIMEOUT = 120
+MAX_TIMEOUT = 600  # allow long deploy calls (compose up --build) to complete
 MAX_BODY_CHARS = 200_000
 _METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
 
@@ -53,17 +53,46 @@ def _config_path(config_ref: str | None) -> Path:
     return Path(os.environ.get("MCP_VPS_CONFIG", str(_DEFAULT_CONFIG)))
 
 
-def load_channel_config(config_ref: str | None = None) -> dict[str, Any]:
+def _load_raw(config_ref: str | None) -> dict[str, Any]:
     path = _config_path(config_ref)
     if not path.is_file():
         raise ChannelConfigError(f"channel config not found: {path}")
     try:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise ChannelConfigError(f"cannot read channel config: {e}") from e
-    if not cfg.get("base_url"):
+
+
+def load_channel_config(channel: str | None = None, config_ref: str | None = None) -> dict[str, Any]:
+    """Resolve the selected channel's config. Two supported shapes:
+
+      named : {"default": "router",
+               "channels": {"router": {"base_url": ..., ...},
+                            "deploy": {"base_url": ..., "bearer_token": ..., ...}}}
+      single: {"base_url": ..., ...}   (legacy; the only channel)
+
+    Returns the chosen channel dict (base_url + optional CF-Access / bearer creds).
+    Lets the agent reach both the router and the romion-deploy release plane while
+    each channel keeps its own bounded credentials.
+    """
+    raw = _load_raw(config_ref)
+    chans = raw.get("channels")
+    if isinstance(chans, dict):
+        name = channel or raw.get("default")
+        if not name:
+            raise ChannelConfigError("config has 'channels' but no 'default' and no channel given")
+        if name not in chans:
+            raise ChannelConfigError(f"unknown channel: {name} (configured: {', '.join(sorted(chans))})")
+        ch = chans[name]
+        if not isinstance(ch, dict) or not ch.get("base_url"):
+            raise ChannelConfigError(f"channel '{name}' missing 'base_url'")
+        return ch
+    # legacy single-channel
+    if channel not in (None, "default"):
+        raise ChannelConfigError(f"single-channel config has no named channel '{channel}'")
+    if not raw.get("base_url"):
         raise ChannelConfigError("channel config missing 'base_url'")
-    return cfg
+    return raw
 
 
 def _headers(cfg: dict[str, Any]) -> dict[str, str]:
@@ -80,15 +109,16 @@ def call(
     method: str,
     path: str,
     body: Any | None = None,
+    channel: str | None = None,
     config_ref: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
-    """Make an authenticated request to the configured channel. Returns response
-    status/body only — never the request headers (which carry secrets)."""
+    """Make an authenticated request to the selected channel (default if None).
+    Returns response status/body only — never the request headers (secrets)."""
     method = method.upper()
     if method not in _METHODS:
         raise ValueError(f"unsupported method: {method}")
-    cfg = load_channel_config(config_ref)
+    cfg = load_channel_config(channel, config_ref)
     timeout = max(1, min(int(timeout), MAX_TIMEOUT))
 
     base = str(cfg["base_url"]).rstrip("/")
