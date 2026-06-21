@@ -44,6 +44,8 @@ services:
       - python
       - -m
       - src.server
+      - --host
+      - 0.0.0.0
       - --auth
       - oauth
       - --transport
