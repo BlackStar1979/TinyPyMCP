@@ -4,6 +4,10 @@
 # Secrets are NEVER baked into the image: the operator provisions them ONCE on
 # the VPS host and they are injected here (env_file) / mounted read-only
 # (/secrets). The agent never sees them; they never leave the VPS.
+name: tinypymcp   # stable compose project name across releases (per-release dir
+                  # would otherwise namespace the project by sha → orphan
+                  # containers + per-release volumes losing data).
+
 services:
   tinypymcp:
     build:
