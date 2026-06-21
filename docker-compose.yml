@@ -1,0 +1,62 @@
+# TinyPyMCP on the VPS — built+run by the romion-deploy release plane
+# (docker compose up -d --build inside the active release).
+#
+# Secrets are NEVER baked into the image: the operator provisions them ONCE on
+# the VPS host and they are injected here (env_file) / mounted read-only
+# (/secrets). The agent never sees them; they never leave the VPS.
+services:
+  tinypymcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tinypymcp:latest
+    container_name: tinypymcp
+    restart: unless-stopped
+
+    # Operator-provisioned on the VPS (NOT in the repo/bundle). Holds e.g.
+    # MCP_OAUTH_OPERATOR_SECRET=...  (the OAuth human-gate secret).
+    env_file:
+      - /home/deploy/secrets/tinypymcp.env
+
+    environment:
+      # Agent workspace root (run_command/file tools confined here).
+      MCP_ALLOWED_ROOT: /work
+      MCP_WORKSPACE_ROOT: /work/workspaces
+      # Datastores OUTSIDE the workspace root → unreachable by file tools.
+      MCP_OAUTH_DB: /data/oauth.db
+      MCP_MEMORY_DB: /data/memory.db
+      MCP_AUDIT_LOG: /data/logs/.tinypymcp-audit.jsonl
+      # Cloud creds by reference (read-only mount below); never arguments.
+      MCP_CF_CONFIG: /secrets/cloudflare.json
+      MCP_OVH_CONFIG: /secrets/ovh.json
+      MCP_VPS_CONFIG: /secrets/vps-channel.json
+      MCP_PUBLIC_HOST: tiny-py-mcp.romionologic.dev
+      MCP_RATE_LIMIT_PER_MIN: "120"
+
+    volumes:
+      - tinypymcp-data:/data
+      - tinypymcp-work:/work
+      - /home/deploy/secrets:/secrets:ro
+
+    # OAuth 2.1 over HTTP. Profile selects the exposed tool tier; tighten by
+    # dropping cloud_admin/operator_admin for a less-privileged instance.
+    command:
+      - python
+      - -m
+      - src.server
+      - --auth
+      - oauth
+      - --transport
+      - http
+      - --port
+      - "8765"
+      - --profile
+      - read_only,operator_admin,cloud_admin
+
+    # Local only; the VPS cloudflared tunnel fronts this and adds TLS/public host.
+    ports:
+      - "127.0.0.1:8765:8765"
+
+volumes:
+  tinypymcp-data:
+  tinypymcp-work:
