@@ -13,7 +13,7 @@ WORKDIR /app
 
 # Dependencies (mirror pyproject [project].dependencies). Installed before src
 # for layer caching; ovh is lazy-imported but present for the host-layer tools.
-RUN pip install --no-cache-dir "mcp>=1.2.0" "httpx>=0.27" "ovh>=1.1"
+RUN pip install --no-cache-dir "mcp>=1.2.0" "httpx>=0.27" "ovh>=1.1" "uptime-kuma-api>=1.0"
 
 COPY src ./src
 COPY pyproject.toml README.md ./

@@ -34,6 +34,7 @@ services:
       MCP_CF_CONFIG: /secrets/cloudflare.json
       MCP_OVH_CONFIG: /secrets/ovh.json
       MCP_VPS_CONFIG: /secrets/vps-channel.json
+      MCP_KUMA_CONFIG: /secrets/kuma.json
       MCP_PUBLIC_HOST: tiny-py-mcp.romionologic.dev
       MCP_RATE_LIMIT_PER_MIN: "120"
 

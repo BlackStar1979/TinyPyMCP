@@ -38,7 +38,7 @@ import httpx
 # Outside C:\Work on purpose, so the agent's sandboxed file tools cannot read it.
 _DEFAULT_CONFIG = Path.home() / ".romion" / "vps-channel.json"
 DEFAULT_TIMEOUT = 30
-MAX_TIMEOUT = 120
+MAX_TIMEOUT = 600  # allow long deploy calls (compose up --build) to complete
 MAX_BODY_CHARS = 200_000
 _METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
 

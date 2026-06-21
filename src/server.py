@@ -1106,6 +1106,55 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         audit("ovh_reboot", {})
         return ovhc.reboot()
 
+    # --- Uptime Kuma (status.romionologic.dev; read in read_only, manage in cloud_admin) ---
+    from src import kuma_client as kumac
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma list monitors", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_list_monitors() -> dict[str, Any]:
+        """List Uptime Kuma monitors (id/name/url/type/active). Read-only."""
+        return kumac.list_monitors()
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma monitor status", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_monitor_status() -> dict[str, Any]:
+        """Latest heartbeat status per monitor (0=down, 1=up, 2=pending, 3=maintenance). Read-only."""
+        return kumac.monitor_status()
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma add monitor", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def kuma_add_monitor(
+        name: Annotated[str, Field(description="Monitor name.")],
+        url: Annotated[str, Field(description="URL to monitor.")],
+        interval: Annotated[int, Field(description="Check interval (seconds).")] = 60,
+        accepted_statuscodes: Annotated["list[str] | None", Field(description="Accepted HTTP status ranges, e.g. ['200-299'] or ['401']. Default 200-299.")] = None,
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Add an HTTP monitor to Uptime Kuma. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "add_monitor", "name": name, "url": url, "note": "set confirm=true to apply"}
+        audit("kuma_add_monitor", {"name": name, "url": url})
+        return kumac.add_monitor(name, url, interval=interval, accepted_statuscodes=accepted_statuscodes)
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma pause monitor", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_pause_monitor(
+        monitor_id: Annotated[int, Field(description="Monitor id (from kuma_list_monitors).")],
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Pause a Kuma monitor. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "pause_monitor", "monitor_id": monitor_id, "note": "set confirm=true to apply"}
+        audit("kuma_pause_monitor", {"monitor_id": monitor_id})
+        return kumac.pause_monitor(monitor_id)
+
+    @mcp.tool(annotations=ToolAnnotations(title="Kuma resume monitor", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def kuma_resume_monitor(
+        monitor_id: Annotated[int, Field(description="Monitor id (from kuma_list_monitors).")],
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Resume a paused Kuma monitor. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "resume_monitor", "monitor_id": monitor_id, "note": "set confirm=true to apply"}
+        audit("kuma_resume_monitor", {"monitor_id": monitor_id})
+        return kumac.resume_monitor(monitor_id)
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)
