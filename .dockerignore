@@ -1,0 +1,15 @@
+# Keep the build context (and image) lean and secret-free.
+.git
+.gitignore
+.trash
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+data
+logs
+workspaces
+tests
+*.zip
+.mcp_*

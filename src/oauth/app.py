@@ -12,6 +12,8 @@ it calls complete_authorization to mint the code and 302s to the client.
 from __future__ import annotations
 
 import os
+import time
+from collections import deque
 
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
@@ -28,6 +30,22 @@ _LOGIN_FORM = """<!doctype html><html><body style="font-family:sans-serif;max-wi
   <p><input type="password" name="password" placeholder="operator secret" style="width:100%;padding:.5rem"></p>
   <button style="padding:.5rem 1rem">Authorize</button>
 </form></body></html>"""
+
+# Per-IP brute-force guard for the operator-login POST. In-process, on by
+# default (independent of the optional global MCP_RATE_LIMIT_PER_MIN).
+_LOGIN_ATTEMPTS: dict[str, deque] = {}
+_LOGIN_MAX_PER_MIN = 10
+
+
+def _login_throttled(ip: str) -> bool:
+    now = time.time()
+    dq = _LOGIN_ATTEMPTS.setdefault(ip, deque())
+    while dq and dq[0] < now - 60:
+        dq.popleft()
+    if len(dq) >= _LOGIN_MAX_PER_MIN:
+        return True
+    dq.append(now)
+    return False
 
 
 def oauth_auth_settings(issuer_url: str) -> AuthSettings:
@@ -47,6 +65,9 @@ def register_operator_login(mcp, provider: RomionOAuthProvider) -> None:
     async def operator_login(request: Request):
         if request.method == "GET":
             return HTMLResponse(_LOGIN_FORM.format(pid=request.query_params.get("pid", "")))
+        ip = request.client.host if request.client else "?"
+        if _login_throttled(ip):
+            return PlainTextResponse("too many attempts; wait a minute", status_code=429)
         form = await request.form()
         try:
             url = provider.complete_authorization(str(form.get("pid", "")), str(form.get("password", "")))
@@ -86,6 +107,9 @@ def build_oauth_mcp(issuer_url: str, operator_secret: str, port: int = 8765,
     async def operator_login(request: Request):
         if request.method == "GET":
             return HTMLResponse(_LOGIN_FORM.format(pid=request.query_params.get("pid", "")))
+        ip = request.client.host if request.client else "?"
+        if _login_throttled(ip):
+            return PlainTextResponse("too many attempts; wait a minute", status_code=429)
         form = await request.form()
         pid = str(form.get("pid", ""))
         password = str(form.get("password", ""))

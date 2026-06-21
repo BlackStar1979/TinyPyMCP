@@ -27,10 +27,11 @@ class BearerAuthMiddleware:
        path short of full OAuth. Rotate the token if a log is exposed.
     """
 
-    def __init__(self, app, token: str):
+    def __init__(self, app, token: str, allow_query_token: bool = False):
         self.app = app
         self._token = token
         self._expected = f"Bearer {token}"
+        self._allow_query_token = allow_query_token
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
@@ -41,7 +42,7 @@ class BearerAuthMiddleware:
         provided = headers.get(b"authorization", b"").decode("latin-1")
         ok = hmac.compare_digest(provided, self._expected)
 
-        if not ok:
+        if not ok and self._allow_query_token:
             qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
             qtok = (qs.get("token") or [""])[0]
             ok = hmac.compare_digest(qtok, self._token)

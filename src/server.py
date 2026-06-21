@@ -53,7 +53,8 @@ from src.utils.audit import audit
 
 
 def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "bearer",
-                  issuer_url: str | None = None, operator_secret: str | None = None) -> FastMCP:
+                  issuer_url: str | None = None, operator_secret: str | None = None,
+                  profiles: "list[str] | None" = None) -> FastMCP:
     # Public hosts/origins served behind the Cloudflare Tunnel. Local entries
     # are derived from the bound port (no longer hardcoded to 8765).
     public_host = os.environ.get("MCP_PUBLIC_HOST", "tiny-py-mcp.romionologic.dev")
@@ -786,13 +787,13 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True,
         )
     )
-    def vps_status(
-        config_ref: Annotated[str | None, Field(description="Path to the channel config JSON. Omit to use the default (MCP_VPS_CONFIG or secrets/vps-channel.json).")] = None,
-    ) -> dict[str, Any]:
+    def vps_status() -> dict[str, Any]:
         """GET /v1/status on the configured bounded VPS channel. Credentials
         (Cloudflare Access service token / bearer) are read from the config file
-        on disk, never passed here. Use to confirm the channel is reachable."""
-        return vps_call_op("GET", "/v1/status", None, config_ref)
+        on disk, never passed here. Use to confirm the channel is reachable.
+        The config path is fixed server-side (MCP_VPS_CONFIG / default), not a
+        tool argument, to avoid a confused-deputy / file-existence oracle."""
+        return vps_call_op("GET", "/v1/status", None, None)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -804,13 +805,13 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         method: Annotated[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], Field(description="HTTP method.")],
         path: Annotated[str, Field(description="Path on the channel, e.g. '/v1/exec/run' or '/v1/compose/demo/up'. Appended to the configured base_url.", min_length=1)],
         body: Annotated[dict[str, Any] | None, Field(description="Optional JSON body.")] = None,
-        config_ref: Annotated[str | None, Field(description="Path to the channel config JSON. Omit for the default.")] = None,
     ) -> dict[str, Any]:
         """Make an authenticated request to the configured bounded VPS channel
         (router or deploy). The path is appended to the channel's base_url, so
         only that one host is reachable. Credentials come from the config file on
-        disk — never from arguments. The server enforces what operations exist."""
-        return vps_call_op(method, path, body, config_ref)
+        disk — never from arguments. The config path is fixed server-side, not a
+        tool argument. The server enforces what operations exist."""
+        return vps_call_op(method, path, body, None)
 
     # ── Cloudflare admin (token from ~/.romion/cloudflare.json, never an arg) ──
 
@@ -1025,9 +1026,97 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         audit("cf_delete_service_token", {"token_id": token_id})
         return cf.delete_service_token(token_id)
 
+    # --- OVHcloud host layer (scoped consumer key; read in read_only, mutations in cloud_admin) ---
+    from src import ovh_client as ovhc
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH VPS info", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def ovh_vps_info() -> dict[str, Any]:
+        """Read VPS host info (model/state/zone) via the OVH API. Credentials are read from
+        a config file on disk (never arguments); the consumer-key access rules are the hard bound."""
+        return ovhc.vps_info()
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH snapshot status", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def ovh_snapshot_status() -> dict[str, Any]:
+        """Current VPS snapshot (ok:false / not-found if none exists). Read-only."""
+        return ovhc.snapshot_status()
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH automated backup status", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def ovh_automated_backup_status() -> dict[str, Any]:
+        """Automated-backup settings/state for the VPS. Read-only."""
+        return ovhc.automated_backup_status()
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH available images", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def ovh_images_available() -> dict[str, Any]:
+        """List OS image ids available for the VPS (for reference; reinstall/rebuild stay operator-only). Read-only."""
+        return ovhc.images_available()
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH create snapshot", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def ovh_create_snapshot(
+        description: Annotated[str, Field(description="Optional snapshot label.")] = "",
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Create the VPS snapshot (single-snapshot model) — the deploy safety-net. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "createSnapshot", "note": "set confirm=true to apply"}
+        audit("ovh_create_snapshot", {"description": description})
+        return ovhc.create_snapshot(description or None)
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH revert snapshot", readOnlyHint=False, idempotentHint=False, destructiveHint=True, openWorldHint=True))
+    def ovh_revert_snapshot(
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Revert the VPS to its snapshot — rolls back the WHOLE host disk (data written after the
+        snapshot is lost). Use only for infra rollback, not after DB writes. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "snapshot/revert", "warn": "reverts the entire host disk; data written after the snapshot is lost", "note": "set confirm=true to apply"}
+        audit("ovh_revert_snapshot", {})
+        return ovhc.revert_snapshot()
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH abort snapshot", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def ovh_abort_snapshot(
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Abort an in-progress snapshot/automated-backup operation. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "abortSnapshot", "note": "set confirm=true to apply"}
+        audit("ovh_abort_snapshot", {})
+        return ovhc.abort_snapshot()
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH automated-backup restore", readOnlyHint=False, idempotentHint=False, destructiveHint=True, openWorldHint=True))
+    def ovh_automated_backup_restore(
+        restore_point: Annotated[str, Field(description="Restore point id (from the automated backup restorePoints list).")],
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Restore the VPS from an automated-backup restore point. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "automatedBackup/restore", "restore_point": restore_point, "note": "set confirm=true to apply"}
+        audit("ovh_automated_backup_restore", {"restore_point": restore_point})
+        return ovhc.automated_backup_restore(restore_point)
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH reboot VPS", readOnlyHint=False, idempotentHint=False, destructiveHint=True, openWorldHint=True))
+    def ovh_reboot(
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Reboot the VPS host (disruptive — affects every service on it). Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "reboot", "warn": "reboots the whole host", "note": "set confirm=true to apply"}
+        audit("ovh_reboot", {})
+        return ovhc.reboot()
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)
+
+    # Profile gate: prune the registered surface to the union of selected
+    # profiles. None = expose all (default). The active profiles ARE the
+    # authorization boundary for which capability tiers this instance offers.
+    if profiles is not None:
+        from src.profiles import tools_for_profiles
+        active = tools_for_profiles(profiles)
+        tm = mcp._tool_manager
+        for name in list(tm._tools.keys()):
+            if name not in active:
+                tm.remove_tool(name)
 
     return mcp
 
@@ -1067,6 +1156,16 @@ def main() -> None:
         default=None,
         help='Bearer mode: JSON file with {"token": "..."}.',
     )
+    parser.add_argument(
+        "--allow-query-token",
+        action="store_true",
+        help="Bearer mode: also accept ?token= in the URL (for connectors that can't send headers, e.g. ChatGPT). Off by default — the token can leak into proxy/browser logs.",
+    )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Comma-separated tool profiles to expose: read_only, operator_admin, cloud_admin, or all (default all). Flag > MCP_PROFILES env.",
+    )
     args = parser.parse_args()
 
     import json as _json
@@ -1099,12 +1198,21 @@ def main() -> None:
         print("[TinyPyMCP] REFUSING TO START: oauth mode but no operator secret (--secret-file or MCP_OAUTH_OPERATOR_SECRET).")
         raise SystemExit(2)
 
+    from src.profiles import resolve_profile_names
+    try:
+        active_profiles = resolve_profile_names(args.profile or os.environ.get("MCP_PROFILES"))
+    except ValueError as e:
+        print(f"[TinyPyMCP] REFUSING TO START: {e}")
+        raise SystemExit(2)
+
     mcp = create_server(
         port=args.port,
         auth_mode="oauth" if (is_http and auth_mode == "oauth") else "bearer",
         issuer_url=issuer,
         operator_secret=operator_secret,
+        profiles=active_profiles,
     )
+    print(f"[TinyPyMCP] Active tool profiles: {', '.join(active_profiles)}")
 
     # Report exposed tools at startup so it's obvious what the connector sees.
     try:
@@ -1141,9 +1249,10 @@ def main() -> None:
                 print("[TinyPyMCP] REFUSING TO START: no bearer token.")
                 print("[TinyPyMCP] Use --token-file <json>, MCP_AUTH_TOKEN=<secret>, --auth oauth, or --auth none.")
                 raise SystemExit(2)
+            allow_qt = args.allow_query_token or os.environ.get("MCP_ALLOW_QUERY_TOKEN", "").strip().lower() in ("1", "true", "yes", "on")
             from src.auth_middleware import BearerAuthMiddleware
-            app.add_middleware(BearerAuthMiddleware, token=token)
-            print(f"[TinyPyMCP] Bearer auth ENABLED on {path}")
+            app.add_middleware(BearerAuthMiddleware, token=token, allow_query_token=allow_qt)
+            print(f"[TinyPyMCP] Bearer auth ENABLED on {path}" + (" (+ ?token= query accepted)" if allow_qt else " (header-only)"))
 
         rl = int(os.environ.get("MCP_RATE_LIMIT_PER_MIN", "0") or 0)
         if rl > 0:

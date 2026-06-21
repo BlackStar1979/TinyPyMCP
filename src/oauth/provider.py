@@ -80,12 +80,13 @@ class RomionOAuthProvider(OAuthAuthorizationServerProvider):
             "resource": pend.get("resource"),
             "expires_at": int(time.time() + CODE_TTL),
         }, ttl=CODE_TTL)
+        from urllib.parse import urlencode
         redirect = pend["redirect_uri"]
-        sep = "&" if "?" in redirect else "?"
-        url = f"{redirect}{sep}code={code}"
+        params = {"code": code}
         if pend.get("state"):
-            url += f"&state={pend['state']}"
-        return url
+            params["state"] = pend["state"]
+        sep = "&" if "?" in redirect else "?"
+        return f"{redirect}{sep}{urlencode(params)}"
 
     async def load_authorization_code(self, client: OAuthClientInformationFull, authorization_code: str) -> AuthorizationCode | None:
         d = store.get_code(authorization_code)

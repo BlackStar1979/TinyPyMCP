@@ -28,7 +28,8 @@ from src.memory import store as mem           # noqa: E402
 from src.code import deps, symbols            # noqa: E402
 from src.code import search_index as si       # noqa: E402
 from src.vps import channel as ch             # noqa: E402
-from src.cf import client as cf               # noqa: E402
+from src.cf import client as cf              # noqa: E402
+from src import ovh_client as ovhc               # noqa: E402
 from src.server import create_server          # noqa: E402
 
 _passed = 0
@@ -63,6 +64,10 @@ def main():
     check("inside C:/Work allowed", lambda: ensure_within(work))
     check("outside blocked", lambda: expect_raises(PermissionError, lambda: ensure_within(r"C:\Windows\x")))
     check("traversal blocked", lambda: expect_raises(PermissionError, lambda: ensure_within(r"C:\Work\sub\..\..\Windows\evil")))
+    check("oauth db blocked from file tools", lambda: expect_raises(PermissionError, lambda: ensure_within(os.environ["MCP_OAUTH_DB"])))
+    check("memory db blocked from file tools", lambda: expect_raises(PermissionError, lambda: ensure_within(os.environ["MCP_MEMORY_DB"])))
+    _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    check("project data dir blocked", lambda: expect_raises(PermissionError, lambda: ensure_within(os.path.join(_proj, "data", "probe.db"))))
 
     print("file ops")
     check("write+read", lambda: (fo.write_file_content(f1, "import os\n\ndef foo():\n    return 1\n"),
@@ -114,11 +119,26 @@ def main():
     print("cloudflare client")
     check("cf missing config -> error", lambda: expect_raises(cf.CFConfigError, lambda: cf.verify_token(config_ref=os.path.join(_TMP, "none.json"))))
 
+    print("ovh client")
+    check("ovh missing config -> error", lambda: expect_raises(ovhc.OVHConfigError, lambda: ovhc.vps_info(config_ref=os.path.join(_TMP, "none.json"))))
+
+    print("http_probe SSRF guard")
+    from src.net.fetch import _guard_public_url  # noqa: E402
+    check("blocks loopback", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://127.0.0.1/")))
+    check("blocks cloud metadata", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://169.254.169.254/latest/meta-data/")))
+    check("blocks private LAN", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://10.0.0.1/")))
+    check("blocks non-http scheme", lambda: expect_raises(ValueError, lambda: _guard_public_url("file:///C:/Windows/x")))
+    check("allows public literal ip", lambda: _guard_public_url("http://8.8.8.8/"))
+
     print("oauth")
     check("oauth flow gates MCP (401 anon, 200 with token)", _check_oauth_flow)
+    check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
-    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 50))
+    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 59))
+
+    print("tool profiles")
+    check("profiles partition + prune the 50-tool surface", _check_profiles)
 
 
 def assert_true(cond):
@@ -156,6 +176,51 @@ def _check_oauth_flow():
                     "client_id": cid, "code_verifier": v}).json()["access_token"]
         assert_true(c.post("/mcp/v5", json=INIT, headers=ACC).status_code == 401)
         assert_true(c.post("/mcp/v5", json=INIT, headers={**ACC, "Authorization": f"Bearer {at}"}).status_code == 200)
+
+
+def _check_query_token_gate():
+    import asyncio
+
+    from src.auth_middleware import BearerAuthMiddleware
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    async def status_for(mw):
+        scope = {"type": "http", "headers": [], "query_string": b"token=SEKRET"}
+        seen = []
+
+        async def send(m):
+            if m["type"] == "http.response.start":
+                seen.append(m["status"])
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await mw(scope, receive, send)
+        return seen[0]
+
+    off = asyncio.run(status_for(BearerAuthMiddleware(app, "SEKRET", allow_query_token=False)))
+    on = asyncio.run(status_for(BearerAuthMiddleware(app, "SEKRET", allow_query_token=True)))
+    assert_true(off == 401 and on == 200)
+
+
+def _check_profiles():
+    from src.profiles import READ_ONLY, OPERATOR_ADMIN, CLOUD_ADMIN
+    from src.server import create_server as cs
+    # disjoint tiers, totalling exactly the registered surface
+    assert_true(not (READ_ONLY & OPERATOR_ADMIN))
+    assert_true(not (OPERATOR_ADMIN & CLOUD_ADMIN))
+    assert_true(not (READ_ONLY & CLOUD_ADMIN))
+    union = READ_ONLY | OPERATOR_ADMIN | CLOUD_ADMIN
+    assert_true(len(union) == 59)
+    live = {t.name for t in cs()._tool_manager.list_tools()}
+    assert_true(live == union)  # catches any profile name typo vs live tools
+    # pruning to each tier yields the expected surface
+    assert_true(len(cs(profiles=["read_only"])._tool_manager.list_tools()) == len(READ_ONLY))
+    assert_true(len(cs(profiles=["read_only", "operator_admin"])._tool_manager.list_tools()) == len(READ_ONLY | OPERATOR_ADMIN))
+    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 59)
 
 
 def _check_env_sanitized():
