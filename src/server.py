@@ -106,14 +106,20 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         except Exception:
             pass
 
-    # TODO: Implement proper Sampling handler + advanced async session lifecycle
-    # This is the main area we need to expand for full Streamable HTTP + Sampling support.
-
-    # Placeholder for future Sampling implementation
-    # When ready, we will add:
-    # - @mcp.sampling() or custom handler for sampling/createMessage
-    # - Better async context management for long tool executions
-    # - Progress notifications and cancellable tasks
+    # Roadmap (aligned to the sessionless MCP direction — SEP-2567/2575, RC 2026-07-28):
+    # the transport is already STATELESS (stateless_http=True, no Mcp-Session-Id), and
+    # cross-call state is carried by the memory layer as explicit application-level
+    # handles (memory_set_state's session_id) — exactly the explicit-state-handle
+    # pattern that replaces transport sessions. So we deliberately do NOT build an
+    # "advanced HTTP session lifecycle"; that is the thing the spec is removing.
+    #
+    # Open items, in priority order:
+    # - Active cancellation for long tools (run_command/clone_repo/build_index/
+    #   vps_request): honor client disconnect -> propagate cancel; keep timeout as the
+    #   safety net. (Mirrors the mcp-tests D6 decision.)
+    # - Optional Sampling handler (sampling/createMessage) + progress notifications,
+    #   only if/when a client needs them. SSE transport is legacy/deprecated; prod runs
+    #   streamable-http.
 
     @mcp.tool(
         annotations=ToolAnnotations(

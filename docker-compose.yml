@@ -67,6 +67,7 @@ services:
       - "8765"
     networks:
       - llm_edge
+      - kuma_net
 
 volumes:
   tinypymcp-data:
@@ -76,3 +77,7 @@ networks:
   llm_edge:
     external: true
     name: romion_llm_llm_edge   # same network as romion-deploy / romion-llm-cloudflared
+  kuma_net:
+    external: true
+    name: romion-net            # legacy bridge hosting uptime-kuma; lets kuma_* reach
+                                # http://uptime-kuma:3101 internally (no CF Access in path)
