@@ -31,6 +31,7 @@ from src.vps import channel as ch             # noqa: E402
 from src.cf import client as cf              # noqa: E402
 from src import ovh_client as ovhc              # noqa: E402
 from src import kuma_client as kumac               # noqa: E402
+from src import github_client as ghc                # noqa: E402
 from src.server import create_server          # noqa: E402
 
 _passed = 0
@@ -127,6 +128,9 @@ def main():
     print("kuma client")
     check("kuma missing config -> error", lambda: expect_raises(kumac.KumaConfigError, lambda: kumac.list_monitors(config_ref=os.path.join(_TMP, "none.json"))))
 
+    print("github client")
+    check("github missing config -> error", lambda: expect_raises(ghc.GitHubConfigError, lambda: ghc.repo_info(config_ref=os.path.join(_TMP, "none.json"))))
+
     print("http_probe SSRF guard")
     from src.net.fetch import _guard_public_url  # noqa: E402
     check("blocks loopback", lambda: expect_raises(PermissionError, lambda: _guard_public_url("http://127.0.0.1/")))
@@ -140,7 +144,7 @@ def main():
     check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
-    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 64))
+    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 69))
 
     print("tool profiles")
     check("profiles partition + prune the 50-tool surface", _check_profiles)
@@ -237,13 +241,13 @@ def _check_profiles():
     assert_true(not (OPERATOR_ADMIN & CLOUD_ADMIN))
     assert_true(not (READ_ONLY & CLOUD_ADMIN))
     union = READ_ONLY | OPERATOR_ADMIN | CLOUD_ADMIN
-    assert_true(len(union) == 64)
+    assert_true(len(union) == 69)
     live = {t.name for t in cs()._tool_manager.list_tools()}
     assert_true(live == union)  # catches any profile name typo vs live tools
     # pruning to each tier yields the expected surface
     assert_true(len(cs(profiles=["read_only"])._tool_manager.list_tools()) == len(READ_ONLY))
     assert_true(len(cs(profiles=["read_only", "operator_admin"])._tool_manager.list_tools()) == len(READ_ONLY | OPERATOR_ADMIN))
-    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 64)
+    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 69)
 
 
 def _check_env_sanitized():

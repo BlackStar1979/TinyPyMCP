@@ -1161,6 +1161,65 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         audit("kuma_resume_monitor", {"monitor_id": monitor_id})
         return kumac.resume_monitor(monitor_id)
 
+    # --- GitHub (REST API via token; reads in read_only, PR mutations in cloud_admin) ---
+    from src import github_client as ghc
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub repo info", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def gh_repo_info(
+        owner: Annotated["str | None", Field(description="Repo owner. Omit to use the config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit to use the config default.")] = None,
+    ) -> dict[str, Any]:
+        """Get repo info (full_name/default_branch/private/url/description). Read-only."""
+        return ghc.repo_info(owner, repo)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub list PRs", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def gh_list_prs(
+        state: Annotated[str, Field(description="open | closed | all.")] = "open",
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+    ) -> dict[str, Any]:
+        """List pull requests (number/title/state/head/base/url). Read-only."""
+        return ghc.list_prs(owner, repo, state=state)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub get PR", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def gh_get_pr(
+        number: Annotated[int, Field(description="PR number.")],
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+    ) -> dict[str, Any]:
+        """Get one pull request. Read-only."""
+        return ghc.get_pr(number, owner, repo)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub create PR", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def gh_create_pr(
+        title: Annotated[str, Field(description="PR title.")],
+        head: Annotated[str, Field(description="Source branch (the branch with changes).")],
+        base: Annotated[str, Field(description="Target branch.")] = "main",
+        body: Annotated[str, Field(description="PR description (Markdown).")] = "",
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Open a pull request (head -> base). Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "create_pr", "title": title, "head": head, "base": base, "note": "set confirm=true to apply"}
+        audit("gh_create_pr", {"title": title, "head": head, "base": base, "repo": repo})
+        return ghc.create_pr(title, head, base=base, body=body, owner=owner, repo=repo)
+
+    @mcp.tool(annotations=ToolAnnotations(title="GitHub merge PR", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def gh_merge_pr(
+        number: Annotated[int, Field(description="PR number to merge.")],
+        method: Annotated[str, Field(description="merge | squash | rebase.")] = "squash",
+        owner: Annotated["str | None", Field(description="Repo owner. Omit for config default.")] = None,
+        repo: Annotated["str | None", Field(description="Repo name. Omit for config default.")] = None,
+        confirm: Annotated[bool, Field(description="Must be true to apply.")] = False,
+    ) -> dict[str, Any]:
+        """Merge a pull request. Guarded + audited."""
+        if not confirm:
+            return {"dry_run": True, "would": "merge_pr", "number": number, "method": method, "note": "set confirm=true to apply"}
+        audit("gh_merge_pr", {"number": number, "method": method, "repo": repo})
+        return ghc.merge_pr(number, method=method, owner=owner, repo=repo)
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)

@@ -25,6 +25,7 @@ READ_ONLY = {
     "vps_status", "cf_verify_token", "cf_list_dns", "cf_list_tunnels", "cf_get_tunnel_config",
     "ovh_vps_info", "ovh_snapshot_status", "ovh_automated_backup_status", "ovh_images_available",
     "kuma_list_monitors", "kuma_monitor_status",
+    "gh_repo_info", "gh_list_prs", "gh_get_pr",
 }
 
 OPERATOR_ADMIN = {
@@ -42,6 +43,7 @@ CLOUD_ADMIN = {
     "ovh_create_snapshot", "ovh_revert_snapshot", "ovh_abort_snapshot",
     "ovh_automated_backup_restore", "ovh_reboot",
     "kuma_add_monitor", "kuma_pause_monitor", "kuma_resume_monitor",
+    "gh_create_pr", "gh_merge_pr",
 }
 
 PROFILES = {"read_only": READ_ONLY, "operator_admin": OPERATOR_ADMIN, "cloud_admin": CLOUD_ADMIN}
