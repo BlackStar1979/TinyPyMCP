@@ -53,10 +53,19 @@ services:
       - --profile
       - read_only,operator_admin,cloud_admin
 
-    # Local only; the VPS cloudflared tunnel fronts this and adds TLS/public host.
-    ports:
-      - "127.0.0.1:8765:8765"
+    # The VPS cloudflared (on romion_llm_llm_edge) reaches this by container name
+    # (tinypymcp:8765) and fronts it with TLS + the public host. Internal-only;
+    # no host port bind.
+    expose:
+      - "8765"
+    networks:
+      - llm_edge
 
 volumes:
   tinypymcp-data:
   tinypymcp-work:
+
+networks:
+  llm_edge:
+    external: true
+    name: romion_llm_llm_edge   # same network as romion-deploy / romion-llm-cloudflared
