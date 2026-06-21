@@ -115,6 +115,7 @@ def main():
 
     print("vps channel")
     check("missing config -> error", lambda: expect_raises(ch.ChannelConfigError, lambda: ch.call("GET", "/v1/status", config_ref=os.path.join(_TMP, "none.json"))))
+    check("named channels resolve (router/deploy) + legacy", _check_vps_channels)
 
     print("cloudflare client")
     check("cf missing config -> error", lambda: expect_raises(cf.CFConfigError, lambda: cf.verify_token(config_ref=os.path.join(_TMP, "none.json"))))
@@ -204,6 +205,24 @@ def _check_query_token_gate():
     off = asyncio.run(status_for(BearerAuthMiddleware(app, "SEKRET", allow_query_token=False)))
     on = asyncio.run(status_for(BearerAuthMiddleware(app, "SEKRET", allow_query_token=True)))
     assert_true(off == 401 and on == 200)
+
+
+def _check_vps_channels():
+    import json as _json
+    from src.vps import channel as ch
+    multi = os.path.join(_TMP, "vps-multi.json")
+    with open(multi, "w", encoding="utf-8") as f:
+        _json.dump({"default": "router", "channels": {
+            "router": {"base_url": "https://router.x"},
+            "deploy": {"base_url": "https://deploy.x", "bearer_token": "t"}}}, f)
+    assert_true(ch.load_channel_config(None, multi)["base_url"] == "https://router.x")     # default
+    assert_true(ch.load_channel_config("deploy", multi)["base_url"] == "https://deploy.x")  # named
+    expect_raises(ch.ChannelConfigError, lambda: ch.load_channel_config("nope", multi))
+    single = os.path.join(_TMP, "vps-single.json")
+    with open(single, "w", encoding="utf-8") as f:
+        _json.dump({"base_url": "https://only.x"}, f)
+    assert_true(ch.load_channel_config(None, single)["base_url"] == "https://only.x")       # legacy
+    expect_raises(ch.ChannelConfigError, lambda: ch.load_channel_config("deploy", single))
 
 
 def _check_profiles():
