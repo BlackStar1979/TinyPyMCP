@@ -26,6 +26,7 @@ READ_ONLY = {
     "ovh_vps_info", "ovh_snapshot_status", "ovh_automated_backup_status", "ovh_images_available",
     "kuma_list_monitors", "kuma_monitor_status",
     "gh_repo_info", "gh_list_prs", "gh_get_pr",
+    "ovh_ai_embeddings", "ovh_ai_chat",
 }
 
 OPERATOR_ADMIN = {

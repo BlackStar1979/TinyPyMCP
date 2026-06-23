@@ -14,6 +14,23 @@ Run: `MCP_AUTH_TOKEN=<secret> python -m src.server --transport http --port 8765`
 only for trusted localhost dev. The connecting client must send
 `Authorization: Bearer <secret>`.)
 
+## SESSION — 2026-06-23
+
+Added OVH AI Endpoints plane (read_only): `ovh_ai_embeddings` (bge-m3, 1024-dim)
++ `ovh_ai_chat` (gpt-oss-20b). `src/ovh_ai_client.py` mirrors `github_client.py`
+(config-by-reference `MCP_OVH_AI_CONFIG` → /secrets/ovh-ai.json; lazy httpx; key
+never in results/logs). This is the VPS clean-IP DIRECT path — AI Endpoints
+rejects the PC + Arena IPs, but the VPS is clean. Key is separate from the MVLTT
+`llm-agent-router` used by romion-llm-router; the engine on the PC still escalates
+via that router (dirty IP). Surface 69 → 71, smoke 47 → 49.
+
+LESSON (cost a whole 403 debug cycle): the access key is 282 chars with a `.` at
+position 120. Copying it by double-click selects only to the period (word
+boundary) → 119 chars stored → truncated token = HTTP 403 (looks exactly like an
+IAM/`ai:endpoints/call` denial). Fix: copy the WHOLE value (copy button / select
+all), store via a raw file + `json.dump` (a period is irrelevant there). Verified
+live: POST /v1/embeddings → 200 + real vectors. Not IAM, not Discovery, not IP.
+
 ## SESSION FREEZE — 2026-06-19 (evening)
 
 GREEN. Live baseline: 50 tools, `python tests/smoke.py` = 34/34. Frozen until
@@ -72,7 +89,7 @@ NEXT SESSION (fresh head, in order):
 
 ## Tests
 
-`python tests/smoke.py` — offline regression over the whole tool surface (33
+`python tests/smoke.py` — offline regression over the whole tool surface (49
 checks: path_guard, file ops incl. patch/soft-delete/restore/list_trash, runner
 + env sanitization, code-intel, index, memory, channel config, create_server
 tool count). Self-contained (temp dirs/DB under C:\Work, cleans up). Run before
@@ -421,6 +438,5 @@ TIER 3: search index posting dedupe (size).
 
 ## Open items
 
-- `src/server.py.bak` — leftover backup from a full rewrite; remove once happy.
 - `edit_code_block` writes with universal-newline translation (\r\n -> \n on
   write). Cosmetic; matches existing safe_replace behavior. Revisit if it bites.

@@ -12,7 +12,7 @@
 A Python MCP server: a sandboxed workshop for an agent — file read/edit, code
 intelligence, search index, local command execution, package lookups, persistent
 memory, and a client for bounded VPS channels. All filesystem access is confined
-to `C:\Work`. **50 tools.**
+to `C:\Work`. **71 tools.**
 
 For development/maintenance notes and the roadmap, see `DEVNOTES.md`.
 
@@ -80,7 +80,10 @@ enter the operator secret on the TinyPyMCP page. See **CONNECTORS.md**.
 (Env-var form also works: `MCP_AUTH_MODE=oauth`, `MCP_OAUTH_OPERATOR_SECRET`,
 `MCP_OAUTH_ISSUER`. Flags take precedence.)
 
-## Tools (37)
+## Tools (71)
+Grouped by domain. The authorization boundary is which **profiles** are enabled
+at launch (read_only / operator_admin / cloud_admin — see `src/profiles.py`);
+`confirm=true` on a tool is an accidental-mutation guard, not authorization.
 - **Read/inspect:** read_file, read_file_chunk, get_info, list_files, get_project_structure, find_phrase_occurrences, search_codebase
 - **Edit/write:** write_file, create_file, append_file, safe_replace_in_line, edit_code_block, edit_file_patch
 - **Manage:** copy_path, move_path, delete_path (soft → .trash), restore_path, list_trash
@@ -90,6 +93,10 @@ enter the operator secret on the TinyPyMCP page. See **CONNECTORS.md**.
 - **Memory (SQLite):** memory_get_state, memory_set_state, memory_save, memory_search, memory_create_task, memory_get_tasks
 - **VPS channel:** vps_status, vps_request
 - **Cloudflare admin** (token from ~/.romion/cloudflare.json; writes need confirm=true): cf_verify_token, cf_list_dns, cf_create_dns_record, cf_delete_dns_record, cf_list_tunnels, cf_get_tunnel_config, cf_add_tunnel_route, cf_remove_tunnel_route, cf_create_access_app, cf_delete_access_app, cf_add_access_service_policy, cf_create_service_token, cf_delete_service_token
+- **OVH host** (consumer key from ~/.romion/ovh.json; writes need confirm=true): ovh_vps_info, ovh_snapshot_status, ovh_automated_backup_status, ovh_images_available, ovh_create_snapshot, ovh_revert_snapshot, ovh_abort_snapshot, ovh_automated_backup_restore, ovh_reboot
+- **OVH AI Endpoints** (OpenAI-compatible Bearer key from ~/.romion/ovh-ai.json; read-only, clean-IP VPS path; key never surfaced): ovh_ai_embeddings, ovh_ai_chat
+- **Uptime Kuma** (socket.io from ~/.romion/kuma.json; writes need confirm=true): kuma_list_monitors, kuma_monitor_status, kuma_add_monitor, kuma_pause_monitor, kuma_resume_monitor
+- **GitHub** (token from ~/.romion/github.json; PR mutations need confirm=true): gh_repo_info, gh_list_prs, gh_get_pr, gh_create_pr, gh_merge_pr
 
 ## Security model
 - **Sandbox:** every file tool resolves paths through `path_guard.ensure_within`
@@ -105,7 +112,7 @@ enter the operator secret on the TinyPyMCP page. See **CONNECTORS.md**.
 
 ## Tests
 ```powershell
-python tests/smoke.py        # 34 offline checks over the whole tool surface
+python tests/smoke.py        # 49 offline checks over the whole tool surface
 ```
 
 ## VPS deploy channel

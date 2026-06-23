@@ -144,10 +144,10 @@ def main():
     check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
-    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 69))
+    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 71))
 
     print("tool profiles")
-    check("profiles partition + prune the 50-tool surface", _check_profiles)
+    check("profiles partition + prune the 71-tool surface", _check_profiles)
 
 
 def assert_true(cond):
@@ -241,13 +241,13 @@ def _check_profiles():
     assert_true(not (OPERATOR_ADMIN & CLOUD_ADMIN))
     assert_true(not (READ_ONLY & CLOUD_ADMIN))
     union = READ_ONLY | OPERATOR_ADMIN | CLOUD_ADMIN
-    assert_true(len(union) == 69)
+    assert_true(len(union) == 71)
     live = {t.name for t in cs()._tool_manager.list_tools()}
     assert_true(live == union)  # catches any profile name typo vs live tools
     # pruning to each tier yields the expected surface
     assert_true(len(cs(profiles=["read_only"])._tool_manager.list_tools()) == len(READ_ONLY))
     assert_true(len(cs(profiles=["read_only", "operator_admin"])._tool_manager.list_tools()) == len(READ_ONLY | OPERATOR_ADMIN))
-    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 69)
+    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 71)
 
 
 def _check_env_sanitized():

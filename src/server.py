@@ -1220,6 +1220,33 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         audit("gh_merge_pr", {"number": number, "method": method, "repo": repo})
         return ghc.merge_pr(number, method=method, owner=owner, repo=repo)
 
+    # --- OVH AI Endpoints (OpenAI-compatible; Bearer key from /secrets; read_only) ---
+    # VPS clean-IP direct path; key separate from the MVLTT llm-agent-router.
+    from src import ovh_ai_client as oai
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH AI embeddings", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def ovh_ai_embeddings(
+        text: Annotated[str, Field(description="Text to embed. (bge-m3 = 1024-dim, multilingual, 8192 tokens.)")],
+        model: Annotated[str, Field(description="Embedding model.")] = "bge-m3",
+    ) -> dict[str, Any]:
+        """Return the embedding vector(s) for the given text via OVH AI Endpoints. Read-only."""
+        return oai.embeddings(text, model=model)
+
+    @mcp.tool(annotations=ToolAnnotations(title="OVH AI chat", readOnlyHint=True, idempotentHint=False, destructiveHint=False, openWorldHint=True))
+    def ovh_ai_chat(
+        prompt: Annotated[str, Field(description="User prompt (single-turn).")],
+        system: Annotated["str | None", Field(description="Optional system instruction.")] = None,
+        model: Annotated[str, Field(description="Chat model, e.g. gpt-oss-20b.")] = "gpt-oss-20b",
+        max_tokens: Annotated[int, Field(description="Max output tokens.", ge=1, le=8192)] = 512,
+        temperature: Annotated["float | None", Field(description="Sampling temperature (omit for model default).")] = None,
+    ) -> dict[str, Any]:
+        """Single chat completion via OVH AI Endpoints (clean-IP VPS path). Non-mutating."""
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        return oai.chat(messages, model=model, max_tokens=max_tokens, temperature=temperature)
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)

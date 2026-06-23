@@ -36,6 +36,7 @@ services:
       MCP_VPS_CONFIG: /secrets/vps-channel.json
       MCP_KUMA_CONFIG: /secrets/kuma.json
       MCP_GITHUB_CONFIG: /secrets/github.json
+      MCP_OVH_AI_CONFIG: /secrets/ovh-ai.json
       MCP_PUBLIC_HOST: tiny-py-mcp.romionologic.dev
       MCP_RATE_LIMIT_PER_MIN: "120"
 
