@@ -14,6 +14,19 @@ Run: `MCP_AUTH_TOKEN=<secret> python -m src.server --transport http --port 8765`
 only for trusted localhost dev. The connecting client must send
 `Authorization: Bearer <secret>`.)
 
+## SESSION — 2026-06-24 (semantic memory — the engine prerequisite)
+
+Upgraded the persistent memory to VECTOR search (sqlite-vec) — the prerequisite
+for the Persistent LLM Engine (operator: "cały cel jest z sqlite-vec upgrade").
+`src/memory/store.py`: memory content embedded via OVH bge-m3 (1024-d, L2-norm so
+vec0 L2 ~ cosine) through `src.ovh_ai_client` (clean-IP VPS); stored in a `vec0`
+table `memory_vec` keyed by memories.id (no migration of base tables). `memory_search`
+does KNN (mode='semantic') with keyword fallback (mode='lexical') so it never
+hard-depends on the network. New `memory_reindex` (operator_admin) backfills.
+Dockerfile installs sqlite-vec system-wide (uid 10001 can't pip --user onto path).
+Verified live API first: vec0 + `WHERE embedding MATCH ? AND k=?` KNN. Surface
+75 -> 76, smoke 51 -> 52. Config: MCP_MEMORY_EMBED / MCP_EMBED_MODEL / MCP_EMBED_DIM.
+
 ## SESSION — 2026-06-24 (host-exec keystone)
 
 Added the host-exec keystone (operator: "znowu nie masz narzędzia, żeby wykonać

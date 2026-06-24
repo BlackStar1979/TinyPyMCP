@@ -145,10 +145,12 @@ def main():
     check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
-    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 75))
+    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 76))
 
     print("tool profiles")
-    check("profiles partition + prune the 75-tool surface", _check_profiles)
+    check("profiles partition + prune the 76-tool surface", _check_profiles)
+    print("memory semantic search (sqlite-vec)")
+    check("vector save/search + graceful fallback", _check_memory_vec)
     print("vps hostfs (read-only host plane)")
     check("hostfs list/read/redact", _check_hostfs)
     print("vps docker (host-exec gating)")
@@ -246,13 +248,13 @@ def _check_profiles():
     assert_true(not (OPERATOR_ADMIN & CLOUD_ADMIN))
     assert_true(not (READ_ONLY & CLOUD_ADMIN))
     union = READ_ONLY | OPERATOR_ADMIN | CLOUD_ADMIN
-    assert_true(len(union) == 75)
+    assert_true(len(union) == 76)
     live = {t.name for t in cs()._tool_manager.list_tools()}
     assert_true(live == union)  # catches any profile name typo vs live tools
     # pruning to each tier yields the expected surface
     assert_true(len(cs(profiles=["read_only"])._tool_manager.list_tools()) == len(READ_ONLY))
     assert_true(len(cs(profiles=["read_only", "operator_admin"])._tool_manager.list_tools()) == len(READ_ONLY | OPERATOR_ADMIN))
-    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 75)
+    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 76)
 
 
 def _check_hostfs():
@@ -283,6 +285,35 @@ def _check_hostfs():
         hfs.ROOT, hfs.SECRET_MODE = old_root, old_mode
         import shutil
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_memory_vec():
+    import importlib.util
+    from src.memory import store as mem
+    tmp = tempfile.mkdtemp(prefix="memvec_")
+    old_db, old_embed = mem.DB_PATH, mem._embed
+
+    def fake_embed(text):  # deterministic 1024-d direction per topic
+        v = [0.0] * mem._EMBED_DIM
+        t = (text or "").lower()
+        v[0 if "kuma" in t else 1 if "cloudflare" in t else 2] = 1.0
+        return mem._normalize(v)
+
+    mem.DB_PATH = Path(tmp) / "m.db"
+    mem._embed = fake_embed
+    try:
+        a = mem.save_memory("uptime kuma monitor heartbeat", category="ops")
+        mem.save_memory("cloudflare tunnel dns record", category="net")
+        res = mem.search_memory("kuma monitoring status", top_k=1)
+        # top hit is the kuma memory in either mode
+        assert_true(res["results"] and res["results"][0]["id"] == a["id"])
+        # if sqlite-vec is installed here, the path must actually be semantic
+        if importlib.util.find_spec("sqlite_vec"):
+            assert_true(res["mode"] == "semantic" and a["embedded"] is True)
+    finally:
+        mem.DB_PATH, mem._embed = old_db, old_embed
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _check_dockerctl():

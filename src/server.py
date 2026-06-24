@@ -544,15 +544,30 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         )
     )
     def memory_search(
-        query: Annotated[str, Field(description="What you're looking for. Scored by keyword overlap against stored content+category.", min_length=2, max_length=512)],
+        query: Annotated[str, Field(description="What you're looking for. Semantically ranked (bge-m3) when available, else keyword overlap.", min_length=2, max_length=512)],
         agent_name: Annotated[str, Field(description="Restrict to one agent's memories. Omit to search all.", max_length=64)] = "",
         top_k: Annotated[int, Field(description="Maximum number of results to return.", ge=1, le=20)] = 5,
-        min_score: Annotated[float, Field(description="Minimum relevance score (0-1) to include a result.", ge=0.0, le=1.0)] = 0.1,
+        min_score: Annotated[float, Field(description="Minimum relevance score (0-1: cosine for semantic, token-overlap for lexical).", ge=0.0, le=1.0)] = 0.1,
     ) -> dict[str, Any]:
-        """Retrieve the most relevant saved memories for a query (keyword
-        token-overlap scoring, no embeddings yet). Call this before assuming you
-        don't know something. Returns scored results plus how many were searched."""
+        """Retrieve the most relevant saved memories for a query. Semantic KNN via
+        sqlite-vec + OVH bge-m3 embeddings when available (result mode='semantic'),
+        with keyword token-overlap fallback (mode='lexical'). Call this before
+        assuming you don't know something. Returns scored results + how many searched."""
         return mem.search_memory(query, agent_name, top_k, min_score)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Memory: reindex embeddings",
+            readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def memory_reindex(
+        agent_name: Annotated[str, Field(description="Restrict backfill to one agent. Omit for all.", max_length=64)] = "",
+        limit: Annotated[int, Field(description="Max memories to embed this call.", ge=1, le=5000)] = 1000,
+    ) -> dict[str, Any]:
+        """Backfill sqlite-vec embeddings for memories that lack them (e.g. saved
+        while the embedding provider was off). Idempotent. Returns counts."""
+        return mem.reindex_embeddings(agent_name, limit)
 
     @mcp.tool(
         annotations=ToolAnnotations(

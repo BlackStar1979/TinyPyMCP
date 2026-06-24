@@ -12,7 +12,7 @@
 A Python MCP server: a sandboxed workshop for an agent — file read/edit, code
 intelligence, search index, local command execution, package lookups, persistent
 memory, and a client for bounded VPS channels. All filesystem access is confined
-to `C:\Work`. **75 tools.**
+to `C:\Work`. **76 tools.**
 
 For development/maintenance notes and the roadmap, see `DEVNOTES.md`.
 
@@ -80,7 +80,7 @@ enter the operator secret on the TinyPyMCP page. See **CONNECTORS.md**.
 (Env-var form also works: `MCP_AUTH_MODE=oauth`, `MCP_OAUTH_OPERATOR_SECRET`,
 `MCP_OAUTH_ISSUER`. Flags take precedence.)
 
-## Tools (75)
+## Tools (76)
 Grouped by domain. The authorization boundary is which **profiles** are enabled
 at launch (read_only / operator_admin / cloud_admin — see `src/profiles.py`);
 `confirm=true` on a tool is an accidental-mutation guard, not authorization.
@@ -90,7 +90,7 @@ at launch (read_only / operator_admin / cloud_admin — see `src/profiles.py`);
 - **Code intelligence:** code_dependencies, code_impact, code_symbols, build_index, search_index, index_status
 - **Exec/acquire:** run_command (allowlisted), clone_repo
 - **Network:** http_probe, check_npm_package, check_pypi_package
-- **Memory (SQLite):** memory_get_state, memory_set_state, memory_save, memory_search, memory_create_task, memory_get_tasks
+- **Memory (SQLite + sqlite-vec):** memory_get_state, memory_set_state, memory_save, memory_search (semantic KNN via bge-m3 embeddings, lexical fallback), memory_reindex, memory_create_task, memory_get_tasks
 - **VPS channel:** vps_status, vps_request
 - **VPS filesystem (read-only, whole host)** via the `/hostfs` ro bind-mount, NOT path_guard-confined: vps_fs_list, vps_fs_stat, vps_fs_read. Read any path on the VPS. Secret-file bytes are withheld unless `MCP_FS_SECRET_MODE=allow` (an air-gapped, no-egress instance).
 - **VPS docker (host control)** via the mounted `docker.sock` (uid 10001 in host group `docker`): vps_docker. Read subcommands (ps/logs/inspect/...) ungated; mutating ones (run/exec/rm/stop/restart/build/compose/...) require `confirm=true` and are audited.
