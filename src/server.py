@@ -1247,6 +1247,35 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         messages.append({"role": "user", "content": prompt})
         return oai.chat(messages, model=model, max_tokens=max_tokens, temperature=temperature)
 
+    # --- Whole-VPS read-only filesystem (host bind-mount; NOT path_guard-confined) ---
+    # Read any file/dir on the VPS. Read-only; secret-file bytes withheld unless
+    # MCP_FS_SECRET_MODE=allow (air-gapped instance). See src/vps/hostfs.py.
+    from src.vps import hostfs as hfs
+
+    @mcp.tool(annotations=ToolAnnotations(title="VPS list dir", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def vps_fs_list(
+        path: Annotated[str, Field(description="Absolute VPS path (e.g. /home/deploy, /etc). Default root.")] = "/",
+        limit: Annotated[int, Field(description="Max entries.", ge=1, le=2000)] = 200,
+    ) -> dict[str, Any]:
+        """List any directory on the whole VPS filesystem (metadata only). Read-only."""
+        return hfs.fs_list(path, limit=limit)
+
+    @mcp.tool(annotations=ToolAnnotations(title="VPS stat path", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def vps_fs_stat(
+        path: Annotated[str, Field(description="Absolute VPS path to stat.")],
+    ) -> dict[str, Any]:
+        """Stat any path on the VPS (type, size, mode, owner, mtime). Read-only."""
+        return hfs.fs_stat(path)
+
+    @mcp.tool(annotations=ToolAnnotations(title="VPS read file", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def vps_fs_read(
+        path: Annotated[str, Field(description="Absolute VPS path to read.")],
+        max_bytes: Annotated[int, Field(description="Max bytes to return.", ge=1, le=1048576)] = 65536,
+        offset: Annotated[int, Field(description="Byte offset to start at.", ge=0)] = 0,
+    ) -> dict[str, Any]:
+        """Read any file on the VPS. Secret-file bytes are withheld in redact mode. Read-only."""
+        return hfs.fs_read(path, max_bytes=max_bytes, offset=offset)
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)

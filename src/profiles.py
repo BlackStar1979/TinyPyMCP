@@ -27,6 +27,7 @@ READ_ONLY = {
     "kuma_list_monitors", "kuma_monitor_status",
     "gh_repo_info", "gh_list_prs", "gh_get_pr",
     "ovh_ai_embeddings", "ovh_ai_chat",
+    "vps_fs_list", "vps_fs_stat", "vps_fs_read",
 }
 
 OPERATOR_ADMIN = {

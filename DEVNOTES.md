@@ -14,6 +14,21 @@ Run: `MCP_AUTH_TOKEN=<secret> python -m src.server --transport http --port 8765`
 only for trusted localhost dev. The connecting client must send
 `Authorization: Bearer <secret>`.)
 
+## SESSION — 2026-06-24
+
+Added whole-VPS read-only filesystem plane (operator: stop self-restricting /
+acting as the agent's hands). `/:/hostfs:ro` bind-mount + `src/vps/hostfs.py` +
+3 read_only tools `vps_fs_list`/`vps_fs_stat`/`vps_fs_read`. NOT path_guard-
+confined — reads any path on the host. Read-only is the boundary.
+
+Secret handling is a PER-INSTANCE POLICY (`MCP_FS_SECRET_MODE`, default `redact`),
+not a hardcoded blind spot. Principle (operator): secret read/write access is a
+function of the consuming agent's EGRESS, not a global toggle. This internet-
+exposed instance redacts secret-file bytes (still shows path/metadata) so values
+never enter the chat transcript; a future air-gapped on-infra agent (no internet,
+infra-only) gets `allow` + write to manage secrets safely. Surface 71 -> 74,
+smoke 49 -> 50 (added hermetic hostfs list/read/redact check).
+
 ## SESSION — 2026-06-23
 
 Added OVH AI Endpoints plane (read_only): `ovh_ai_embeddings` (bge-m3, 1024-dim)

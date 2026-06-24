@@ -37,6 +37,10 @@ services:
       MCP_KUMA_CONFIG: /secrets/kuma.json
       MCP_GITHUB_CONFIG: /secrets/github.json
       MCP_OVH_AI_CONFIG: /secrets/ovh-ai.json
+      # Whole-VPS read plane: host root mounted at /hostfs (ro). Secret-file bytes
+      # withheld for this internet-exposed instance; an air-gapped agent sets allow.
+      MCP_HOSTFS_ROOT: /hostfs
+      MCP_FS_SECRET_MODE: redact
       MCP_PUBLIC_HOST: tiny-py-mcp.romionologic.dev
       MCP_RATE_LIMIT_PER_MIN: "120"
 
@@ -44,6 +48,9 @@ services:
       - tinypymcp-data:/data
       - tinypymcp-work:/work
       - /home/deploy/secrets:/secrets:ro
+      # Whole-VPS read-only view for the vps_fs_* tools (read any path on the host).
+      # Read-only mount; secret-file bytes are withheld by MCP_FS_SECRET_MODE=redact.
+      - /:/hostfs:ro
 
     # OAuth 2.1 over HTTP. Profile selects the exposed tool tier; tighten by
     # dropping cloud_admin/operator_admin for a less-privileged instance.
