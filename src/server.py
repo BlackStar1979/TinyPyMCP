@@ -1276,6 +1276,17 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """Read any file on the VPS. Secret-file bytes are withheld in redact mode. Read-only."""
         return hfs.fs_read(path, max_bytes=max_bytes, offset=offset)
 
+    # --- Host docker control (via mounted docker.sock; reads ungated, mutations confirm+audit) ---
+    from src.vps import dockerctl as dctl
+
+    @mcp.tool(annotations=ToolAnnotations(title="VPS docker", readOnlyHint=False, idempotentHint=False, destructiveHint=True, openWorldHint=False))
+    def vps_docker(
+        args: Annotated[list[str], Field(description="docker CLI args as a list, e.g. ['ps','-a'] or ['logs','--tail','100','tinypymcp']. NOT a shell string.")],
+        confirm: Annotated[bool, Field(description="Must be true for mutating subcommands (run/exec/rm/stop/restart/build/compose/...).")] = False,
+    ) -> dict[str, Any]:
+        """Run a docker CLI command on the VPS host (mounted docker.sock). Reads ungated; mutations confirm-guarded + audited."""
+        return dctl.docker(args, confirm=confirm)
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)

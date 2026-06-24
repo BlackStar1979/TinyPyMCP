@@ -35,7 +35,7 @@ OPERATOR_ADMIN = {
     "copy_path", "move_path", "delete_path", "edit_file_patch", "restore_path",
     "build_index", "run_command", "clone_repo",
     "memory_set_state", "memory_save", "memory_create_task",
-    "vps_request",
+    "vps_request", "vps_docker",
 }
 
 CLOUD_ADMIN = {

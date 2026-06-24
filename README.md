@@ -12,7 +12,7 @@
 A Python MCP server: a sandboxed workshop for an agent — file read/edit, code
 intelligence, search index, local command execution, package lookups, persistent
 memory, and a client for bounded VPS channels. All filesystem access is confined
-to `C:\Work`. **74 tools.**
+to `C:\Work`. **75 tools.**
 
 For development/maintenance notes and the roadmap, see `DEVNOTES.md`.
 
@@ -80,7 +80,7 @@ enter the operator secret on the TinyPyMCP page. See **CONNECTORS.md**.
 (Env-var form also works: `MCP_AUTH_MODE=oauth`, `MCP_OAUTH_OPERATOR_SECRET`,
 `MCP_OAUTH_ISSUER`. Flags take precedence.)
 
-## Tools (74)
+## Tools (75)
 Grouped by domain. The authorization boundary is which **profiles** are enabled
 at launch (read_only / operator_admin / cloud_admin — see `src/profiles.py`);
 `confirm=true` on a tool is an accidental-mutation guard, not authorization.
@@ -93,6 +93,7 @@ at launch (read_only / operator_admin / cloud_admin — see `src/profiles.py`);
 - **Memory (SQLite):** memory_get_state, memory_set_state, memory_save, memory_search, memory_create_task, memory_get_tasks
 - **VPS channel:** vps_status, vps_request
 - **VPS filesystem (read-only, whole host)** via the `/hostfs` ro bind-mount, NOT path_guard-confined: vps_fs_list, vps_fs_stat, vps_fs_read. Read any path on the VPS. Secret-file bytes are withheld unless `MCP_FS_SECRET_MODE=allow` (an air-gapped, no-egress instance).
+- **VPS docker (host control)** via the mounted `docker.sock` (uid 10001 in host group `docker`): vps_docker. Read subcommands (ps/logs/inspect/...) ungated; mutating ones (run/exec/rm/stop/restart/build/compose/...) require `confirm=true` and are audited.
 - **Cloudflare admin** (token from ~/.romion/cloudflare.json; writes need confirm=true): cf_verify_token, cf_list_dns, cf_create_dns_record, cf_delete_dns_record, cf_list_tunnels, cf_get_tunnel_config, cf_add_tunnel_route, cf_remove_tunnel_route, cf_create_access_app, cf_delete_access_app, cf_add_access_service_policy, cf_create_service_token, cf_delete_service_token
 - **OVH host** (consumer key from ~/.romion/ovh.json; writes need confirm=true): ovh_vps_info, ovh_snapshot_status, ovh_automated_backup_status, ovh_images_available, ovh_create_snapshot, ovh_revert_snapshot, ovh_abort_snapshot, ovh_automated_backup_restore, ovh_reboot
 - **OVH AI Endpoints** (OpenAI-compatible Bearer key from ~/.romion/ovh-ai.json; read-only, clean-IP VPS path; key never surfaced): ovh_ai_embeddings, ovh_ai_chat

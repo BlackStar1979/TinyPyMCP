@@ -15,6 +15,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl jq openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# docker CLI (client only) for the vps_docker host-control plane. Talks to the
+# host docker.sock bind-mounted in docker-compose.yml. Static binary = no daemon.
+ARG DOCKER_CLI_VERSION=27.3.1
+RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+    | tar xz -C /usr/local/bin --strip-components=1 docker/docker \
+    && docker --version
+
 WORKDIR /app
 
 # Dependencies (mirror pyproject [project].dependencies). Installed before src

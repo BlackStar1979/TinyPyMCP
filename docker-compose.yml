@@ -51,6 +51,12 @@ services:
       # Whole-VPS read-only view for the vps_fs_* tools (read any path on the host).
       # Read-only mount; secret-file bytes are withheld by MCP_FS_SECRET_MODE=redact.
       - /:/hostfs:ro
+      # Host docker control for vps_docker (mutations confirm-guarded + audited).
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    # uid 10001 needs the host 'docker' group (GID 988) to access the socket.
+    group_add:
+      - "988"
 
     # OAuth 2.1 over HTTP. Profile selects the exposed tool tier; tighten by
     # dropping cloud_admin/operator_admin for a less-privileged instance.

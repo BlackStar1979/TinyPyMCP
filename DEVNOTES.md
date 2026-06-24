@@ -14,6 +14,25 @@ Run: `MCP_AUTH_TOKEN=<secret> python -m src.server --transport http --port 8765`
 only for trusted localhost dev. The connecting client must send
 `Authorization: Bearer <secret>`.)
 
+## SESSION — 2026-06-24 (host-exec keystone)
+
+Added the host-exec keystone (operator: "znowu nie masz narzędzia, żeby wykonać
+polecenie sam?"). `vps_docker` tool (src/vps/dockerctl.py) runs the docker CLI on
+the host via the bind-mounted /var/run/docker.sock: READ subcommands ungated,
+MUTATING (run/exec/rm/stop/restart/build/compose/...) require confirm=true +
+audit. Dockerfile installs the static docker client; docker-compose mounts the
+socket + group_add "988" (host docker GID) so uid 10001 can reach it. This ends
+"operator as the agent's hands" for container/host ops. Surface 74 -> 75, smoke
+50 -> 51. Gating boundary = confirm+audit (this internet-exposed instance) and
+ultimately consumer egress isolation (air-gapped engine = ungated). See
+[[egress-gated-secret-access]] / [[agent-self-restriction-antipattern]].
+
+Deploy note: tinypymcp compose nets are external (romion_llm_llm_edge, romion-net)
++ named volumes, so a bootstrap `docker compose -p tinypymcp -f <clone>/docker-
+compose.yml up -d --build` from a fresh origin clone reattaches everything safely
+(retires chunked base64 transfer for this deploy). After this lands, future
+deploys run via vps_docker server-side (no token-transfer).
+
 ## SESSION — 2026-06-24
 
 Added whole-VPS read-only filesystem plane (operator: stop self-restricting /
