@@ -145,16 +145,18 @@ def main():
     check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
-    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 76))
+    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 79))
 
     print("tool profiles")
-    check("profiles partition + prune the 76-tool surface", _check_profiles)
+    check("profiles partition + prune the 79-tool surface", _check_profiles)
     print("memory semantic search (sqlite-vec)")
     check("vector save/search + graceful fallback", _check_memory_vec)
     print("vps hostfs (read-only host plane)")
     check("hostfs list/read/redact", _check_hostfs)
     print("vps docker (host-exec gating)")
     check("dockerctl confirm-gates mutations", _check_dockerctl)
+    print("sim governance (stage-1)")
+    check("manifest validate/dry-run/catalog", _check_sim)
 
 
 def assert_true(cond):
@@ -248,13 +250,13 @@ def _check_profiles():
     assert_true(not (OPERATOR_ADMIN & CLOUD_ADMIN))
     assert_true(not (READ_ONLY & CLOUD_ADMIN))
     union = READ_ONLY | OPERATOR_ADMIN | CLOUD_ADMIN
-    assert_true(len(union) == 76)
+    assert_true(len(union) == 79)
     live = {t.name for t in cs()._tool_manager.list_tools()}
     assert_true(live == union)  # catches any profile name typo vs live tools
     # pruning to each tier yields the expected surface
     assert_true(len(cs(profiles=["read_only"])._tool_manager.list_tools()) == len(READ_ONLY))
     assert_true(len(cs(profiles=["read_only", "operator_admin"])._tool_manager.list_tools()) == len(READ_ONLY | OPERATOR_ADMIN))
-    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 76)
+    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 79)
 
 
 def _check_hostfs():
@@ -314,6 +316,26 @@ def _check_memory_vec():
         mem.DB_PATH, mem._embed = old_db, old_embed
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _check_sim():
+    from src.sim import manifest as simmf
+    good = {
+        "job_id": "phc-run-0001", "project_id": "romion", "experiment_type": "phc",
+        "engine_version": "0.1.0", "parameter_set": {"agents": 3}, "resource_profile": "gpu-small",
+        "created_at": "2026-06-24T18:00:00+00:00",
+    }
+    assert_true(simmf.validate(good)["ok"] is True)
+    # bad: missing fields + bad enum + bad job_id + unknown field
+    bad = {"job_id": "X", "experiment_type": "nope", "extra": 1}
+    r = simmf.validate(bad)
+    assert_true(r["ok"] is False and len(r["errors"]) >= 3)
+    # dry-run: valid -> plan, never executes/persists; gpu -> separate plane
+    p = simmf.plan_dry_run(good)
+    assert_true(p["ok"] and p["dry_run"] and p["plan"]["would_execute"] is False
+                and "GPU/NPU" in p["plan"]["target_compute_plane"])
+    assert_true(simmf.plan_dry_run(bad)["ok"] is False)
+    assert_true(simmf.catalog()["manifest_schema_id"] == "romion.sim.job_manifest.v1")
 
 
 def _check_dockerctl():

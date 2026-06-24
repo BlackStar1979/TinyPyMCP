@@ -1302,6 +1302,29 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """Run a docker CLI command on the VPS host (mounted docker.sock). Reads ungated; mutations confirm-guarded + audited."""
         return dctl.docker(args, confirm=confirm)
 
+    # --- SIM/compute job governance, stage 1 (read-only / dry-run; MCP as typed
+    # governance interface, never the compute engine — see compute-plane ADR). ---
+    from src.sim import manifest as simmf
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: validate job manifest", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_validate_job_manifest(
+        manifest: Annotated[dict, Field(description="Job manifest object (romion.sim.job_manifest.v1).")],
+    ) -> dict[str, Any]:
+        """Validate a SIM/compute job manifest against the v1 schema. Pure, no state."""
+        return simmf.validate(manifest)
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: dry-run plan", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_submit_job_dry_run(
+        manifest: Annotated[dict, Field(description="Job manifest to validate + plan. NOTHING is persisted or executed.")],
+    ) -> dict[str, Any]:
+        """Validate a manifest and return the would-be execution plan. Persists/executes nothing (ADR stage 1)."""
+        return simmf.plan_dry_run(manifest)
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: experiment catalog", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_experiment_catalog() -> dict[str, Any]:
+        """List the experiment types / resource profiles / schema the governance layer understands."""
+        return simmf.catalog()
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)

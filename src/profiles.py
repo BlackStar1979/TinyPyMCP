@@ -28,6 +28,7 @@ READ_ONLY = {
     "gh_repo_info", "gh_list_prs", "gh_get_pr",
     "ovh_ai_embeddings", "ovh_ai_chat",
     "vps_fs_list", "vps_fs_stat", "vps_fs_read",
+    "sim_validate_job_manifest", "sim_submit_job_dry_run", "sim_experiment_catalog",
 }
 
 OPERATOR_ADMIN = {
