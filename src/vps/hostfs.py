@@ -134,12 +134,12 @@ def fs_list(path: str = "/", limit: int = 200) -> dict[str, Any]:
 def fs_stat(path: str) -> dict[str, Any]:
     """Stat any path on the VPS (type, size, mode, owner, mtime)."""
     real, host_abs = _resolve(path)
-    if not real.exists() and not real.is_symlink():
-        return {"ok": False, "error": f"not found: {host_abs}"}
     try:
+        if not real.exists() and not real.is_symlink():
+            return {"ok": False, "error": f"not found: {host_abs}"}
         return {"ok": True, **_meta(real, host_abs)}
     except OSError as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "path": host_abs}
 
 
 def fs_read(path: str, max_bytes: int = DEFAULT_READ_BYTES,
@@ -147,13 +147,15 @@ def fs_read(path: str, max_bytes: int = DEFAULT_READ_BYTES,
     """Read a file anywhere on the VPS. Secret-file bytes are withheld when
     MCP_FS_SECRET_MODE=redact (metadata still returned)."""
     real, host_abs = _resolve(path)
-    if not real.is_file():
-        return {"ok": False, "error": f"not a file: {host_abs}"}
     is_secret = _is_secret(host_abs)
     try:
+        if not real.is_file():
+            return {"ok": False, "error": f"not a file: {host_abs}"}
         meta = _meta(real, host_abs)
     except OSError as e:
-        return {"ok": False, "error": str(e)}
+        # e.g. the container user can't stat a 0600/0640 file -> clean error,
+        # never a stack trace (and never leaks content).
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "path": host_abs, "secret": is_secret}
     if is_secret and SECRET_MODE != "allow":
         return {"ok": True, "redacted": True, "secret_mode": SECRET_MODE,
                 "reason": "secret file; bytes withheld (set MCP_FS_SECRET_MODE=allow "
