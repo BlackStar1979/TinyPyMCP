@@ -111,15 +111,17 @@ def _meta(real: Path, host_abs: str) -> dict[str, Any]:
 def fs_list(path: str = "/", limit: int = 200) -> dict[str, Any]:
     """List a directory anywhere on the VPS. Metadata only (always safe)."""
     real, host_abs = _resolve(path)
-    if not real.exists():
-        return {"ok": False, "error": f"not found: {host_abs}"}
-    if not real.is_dir():
-        return {"ok": False, "error": f"not a directory: {host_abs}"}
     entries: list[dict[str, Any]] = []
     try:
+        if not real.exists():
+            return {"ok": False, "error": f"not found: {host_abs}"}
+        if not real.is_dir():
+            return {"ok": False, "error": f"not a directory: {host_abs}"}
         names = sorted(os.listdir(real))
-    except PermissionError:
-        return {"ok": False, "error": f"permission denied: {host_abs}"}
+    except OSError as e:
+        # 0700 parent etc. -> clean error (e.g. /home/deploy is 0700, not
+        # traversable by the non-root container user). Never a stack trace.
+        return {"ok": False, "error": f"{type(e).__name__}: {e}", "path": host_abs}
     truncated = len(names) > limit
     for name in names[:limit]:
         child_abs = (host_abs.rstrip("/") + "/" + name) if host_abs != "/" else "/" + name
