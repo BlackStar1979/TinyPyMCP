@@ -9,6 +9,12 @@ FROM python:3.12-slim
 # on first init).
 RUN useradd -r -u 10001 -m -d /home/app app
 
+# Read-only diagnostic binaries for the exec allowlist (curl/openssl/jq/getent).
+# curl needs ca-certificates for TLS; openssl + getent ship with the base.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl jq openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Dependencies (mirror pyproject [project].dependencies). Installed before src

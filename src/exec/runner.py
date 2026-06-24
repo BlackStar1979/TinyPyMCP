@@ -30,6 +30,9 @@ WORKSPACE_ROOT = Path(
 _DEFAULT_ALLOWED = {
     "git", "node", "npm", "npx", "python", "python3",
     "pip", "pip3", "pytest", "ruff", "uv",
+    # read-only diagnostics from inside the container (network is open):
+    # probe endpoints, inspect certs/DNS, slice JSON. No shell, still arg-listed.
+    "curl", "openssl", "jq", "getent",
 }
 
 
