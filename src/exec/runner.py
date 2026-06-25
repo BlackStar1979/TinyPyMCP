@@ -12,8 +12,10 @@ Workspace root: MCP_WORKSPACE_ROOT env, else C:\\Work\\TinyPyMCP\\workspaces.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -188,6 +190,162 @@ def clone_repo(
     args += [repo_url, str(dest)]
 
     result = run_command("git", args, cwd=str(WORKSPACE_ROOT), timeout=300)
+    result["dest"] = str(dest)
+    result["cloned"] = result["exit_code"] == 0 and dest.exists()
+    return result
+
+
+# ── D6: active cancellation (async runner) ──────────────────────────────────
+# SEP active-cancellation / mcp-tests D6 (operator override): a client disconnect
+# cancels the request task; we propagate that into a REAL process kill
+# (kill-on-cancel) instead of leaking a runaway child. `timeout` stays as the
+# safety net. The sync run_command above is kept for internal callers; the MCP
+# tool wrappers route long-running work through these async variants so the
+# anyio cancellation that the transport raises on disconnect can reach us.
+
+async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
+    """Best-effort stop a process and (on POSIX) its whole group: SIGTERM, short
+    grace, then SIGKILL. No-op if it already exited."""
+    if proc.returncode is not None:
+        return
+
+    def _signal_group(sig: int) -> None:
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgid(proc.pid), sig)
+                return
+            except (ProcessLookupError, PermissionError):
+                pass
+        # Windows or killpg failed: signal the process directly.
+        try:
+            proc.terminate() if sig == signal.SIGTERM else proc.kill()
+        except ProcessLookupError:
+            pass
+
+    _signal_group(signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=3)
+        return
+    except asyncio.TimeoutError:
+        pass
+    _signal_group(getattr(signal, "SIGKILL", signal.SIGTERM))
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=3)
+    except asyncio.TimeoutError:
+        pass
+
+
+async def run_command_async(
+    program: str,
+    args: list[str] | None = None,
+    cwd: str | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Async, actively-cancellable variant of run_command (D6).
+
+    Same allowlist/cwd/output guards as run_command. On asyncio.CancelledError
+    (client disconnect propagated by the transport) the child is killed and the
+    cancellation re-raised; on timeout the child is killed and timed_out=True.
+    """
+    args = [str(a) for a in (args or [])]
+    if len(args) > MAX_ARGS:
+        raise ValueError(f"too many args (max {MAX_ARGS})")
+    if any(len(a) > MAX_ARG_LEN for a in args):
+        raise ValueError(f"single arg too long (max {MAX_ARG_LEN} chars)")
+    cmd_prefix = _resolve_program(program)
+
+    if cwd is None:
+        WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+        run_cwd = WORKSPACE_ROOT
+    else:
+        run_cwd = ensure_within(cwd)
+        if not run_cwd.is_dir():
+            raise NotADirectoryError(f"cwd is not a directory: {run_cwd}")
+
+    timeout = max(1, min(int(timeout), MAX_TIMEOUT))
+    full = cmd_prefix + args
+
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(run_cwd),
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "env": _clean_env(),
+    }
+    # Own process group so a cancel/timeout kills the whole tree, not just the
+    # shim (npm/npx spawn children). POSIX is the production path (VPS).
+    if os.name == "posix":
+        popen_kwargs["start_new_session"] = True
+    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    audit("process_start", {"program": program, "args": args, "cwd": str(run_cwd),
+                            "timeout": timeout, "mode": "async"})
+    start = time.monotonic()
+    timed_out = False
+
+    proc = await asyncio.create_subprocess_exec(*full, **popen_kwargs)
+    try:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        rc = proc.returncode
+        out = (out_b or b"").decode("utf-8", "replace")
+        err = (err_b or b"").decode("utf-8", "replace")
+    except asyncio.TimeoutError:
+        timed_out, rc, out, err = True, None, "", ""
+        await _terminate_process(proc)
+    except asyncio.CancelledError:
+        await _terminate_process(proc)
+        audit("process_cancelled", {"program": program, "cwd": str(run_cwd),
+                                    "duration_s": round(time.monotonic() - start, 3)})
+        raise
+
+    duration = round(time.monotonic() - start, 3)
+    out, out_trunc = _truncate(out)
+    err, err_trunc = _truncate(err)
+    audit("process_finish", {
+        "program": program, "cwd": str(run_cwd), "exit_code": rc,
+        "timed_out": timed_out, "duration_s": duration,
+        "stdout_bytes": len(out), "stderr_bytes": len(err), "mode": "async",
+    })
+    return {
+        "program": program,
+        "args": args,
+        "cwd": str(run_cwd),
+        "exit_code": rc,
+        "timed_out": timed_out,
+        "duration_s": duration,
+        "stdout": out,
+        "stdout_truncated": out_trunc,
+        "stderr": err,
+        "stderr_truncated": err_trunc,
+    }
+
+
+async def clone_repo_async(
+    repo_url: str,
+    dest_name: str | None = None,
+    depth: int = 1,
+) -> dict[str, Any]:
+    """Async, cancellable clone (routes through run_command_async)."""
+    if not isinstance(repo_url, str) or not repo_url.strip():
+        raise ValueError("repo_url is required")
+
+    WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+    name = dest_name or repo_url.rstrip("/").split("/")[-1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    if "/" in name or "\\" in name or name in ("", ".", ".."):
+        raise ValueError(f"invalid dest_name: {name}")
+
+    dest = ensure_within(WORKSPACE_ROOT / name)
+    if dest.exists():
+        raise FileExistsError(f"destination already exists: {dest}")
+
+    args = ["clone"]
+    if depth and int(depth) > 0:
+        args += ["--depth", str(int(depth))]
+    args += [repo_url, str(dest)]
+
+    result = await run_command_async("git", args, cwd=str(WORKSPACE_ROOT), timeout=300)
     result["dest"] = str(dest)
     result["cloned"] = result["exit_code"] == 0 and dest.exists()
     return result

@@ -42,7 +42,11 @@ from src.utils.file_ops import (
 )
 from src.utils.path_guard import ensure_within
 from src.memory import store as mem
-from src.exec.runner import ALLOWED_PROGRAMS, clone_repo as clone_repo_op, run_command as run_command_op
+from src.exec.runner import (
+    ALLOWED_PROGRAMS,
+    clone_repo_async as clone_repo_op,
+    run_command_async as run_command_op,
+)
 from src.net.fetch import check_npm_package as check_npm_op, check_pypi_package as check_pypi_op, http_probe as http_probe_op
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
@@ -609,7 +613,7 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             readOnlyHint=False, idempotentHint=False, destructiveHint=True, openWorldHint=True,
         )
     )
-    def run_command(
+    async def run_command(
         program: Annotated[str, Field(description=f"Program to run. Allowlisted only: {sorted(ALLOWED_PROGRAMS)}. No shell, no pipes.")],
         args: Annotated[list[str], Field(description="Arguments as a list, e.g. ['install'] or ['-m','pytest','-q']. Not a shell string.")] = [],
         cwd: Annotated[str | None, Field(description="Working directory (absolute, inside C:\\Work). Defaults to the workspace root.")] = None,
@@ -618,8 +622,9 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """Run one allowlisted dev program (git/node/npm/python/pytest/...) with
         the given args. No shell: pass args as a list, not a command string.
         Returns exit_code, stdout, stderr, whether it timed out, and duration.
-        Used for installing deps, running tests, building, etc."""
-        return run_command_op(program, args, cwd, timeout)
+        Used for installing deps, running tests, building, etc. Long runs are
+        actively cancellable: a client disconnect kills the child process."""
+        return await run_command_op(program, args, cwd, timeout)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -627,15 +632,15 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True,
         )
     )
-    def clone_repo(
+    async def clone_repo(
         repo_url: Annotated[str, Field(description="Git URL to clone, e.g. https://github.com/owner/name.git", min_length=4)],
         dest_name: Annotated[str | None, Field(description="Folder name under the workspace. Defaults to the repo name. No path separators.")] = None,
         depth: Annotated[int, Field(description="Shallow clone depth. 0 = full history.", ge=0, le=1000)] = 1,
     ) -> dict[str, Any]:
         """Clone a git repository into the workspace (under C:\\Work). Network
         access is allowed. Never overwrites an existing folder. Returns the
-        destination path and the git output."""
-        return clone_repo_op(repo_url, dest_name, depth)
+        destination path and the git output. Actively cancellable on disconnect."""
+        return await clone_repo_op(repo_url, dest_name, depth)
 
     # ── Network helpers (Stage 2) ───────────────────────────────────────────
 
