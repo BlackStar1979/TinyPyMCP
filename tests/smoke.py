@@ -145,10 +145,10 @@ def main():
     check("bearer query-token gated (off=401, on=200)", _check_query_token_gate)
 
     print("server")
-    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 79))
+    check("create_server loads", lambda: assert_true(len(create_server()._tool_manager.list_tools()) == 81))
 
     print("tool profiles")
-    check("profiles partition + prune the 79-tool surface", _check_profiles)
+    check("profiles partition + prune the 81-tool surface", _check_profiles)
     print("memory semantic search (sqlite-vec)")
     check("vector save/search + graceful fallback", _check_memory_vec)
     print("vps hostfs (read-only host plane)")
@@ -157,6 +157,8 @@ def main():
     check("dockerctl confirm-gates mutations", _check_dockerctl)
     print("sim governance (stage-1)")
     check("manifest validate/dry-run/catalog", _check_sim)
+    print("research/security plane")
+    check("cve slimming (pure)", _check_security)
 
 
 def assert_true(cond):
@@ -250,13 +252,13 @@ def _check_profiles():
     assert_true(not (OPERATOR_ADMIN & CLOUD_ADMIN))
     assert_true(not (READ_ONLY & CLOUD_ADMIN))
     union = READ_ONLY | OPERATOR_ADMIN | CLOUD_ADMIN
-    assert_true(len(union) == 79)
+    assert_true(len(union) == 81)
     live = {t.name for t in cs()._tool_manager.list_tools()}
     assert_true(live == union)  # catches any profile name typo vs live tools
     # pruning to each tier yields the expected surface
     assert_true(len(cs(profiles=["read_only"])._tool_manager.list_tools()) == len(READ_ONLY))
     assert_true(len(cs(profiles=["read_only", "operator_admin"])._tool_manager.list_tools()) == len(READ_ONLY | OPERATOR_ADMIN))
-    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 79)
+    assert_true(len(cs(profiles=["read_only", "operator_admin", "cloud_admin"])._tool_manager.list_tools()) == 81)
 
 
 def _check_hostfs():
@@ -316,6 +318,17 @@ def _check_memory_vec():
         mem.DB_PATH, mem._embed = old_db, old_embed
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _check_security():
+    from src.net import security as sec
+    sample = {"id": "GHSA-x", "aliases": ["CVE-2023-1", "GHSA-x"], "summary": "boom",
+              "database_specific": {"severity": "HIGH", "cwe_ids": ["CWE-200"]},
+              "affected": [{"ranges": [{"events": [{"introduced": "0"}, {"fixed": "2.31.0"}]}],
+                            "versions": ["a", "b", "c"]}]}
+    s = sec._slim_vuln(sample)
+    assert_true(s["id"] == "GHSA-x" and s["cve"] == ["CVE-2023-1"] and s["severity"] == "HIGH"
+                and s["fixed"] == ["2.31.0"] and "versions" not in s)
 
 
 def _check_sim():

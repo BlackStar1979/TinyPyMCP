@@ -1325,6 +1325,31 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """List the experiment types / resource profiles / schema the governance layer understands."""
         return simmf.catalog()
 
+    # --- Research / security plane (read-only): CVE + GitHub advisory lookup. ---
+    from src.net import security as sec
+
+    @mcp.tool(annotations=ToolAnnotations(title="Check CVEs (OSV)", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def check_cve(
+        package: Annotated[str, Field(description="Package name, e.g. 'requests'.")],
+        ecosystem: Annotated[str, Field(description="OSV ecosystem: PyPI | npm | Go | crates.io | Maven | ...")] = "PyPI",
+        version: Annotated["str | None", Field(description="Optional version to filter to vulns affecting it.")] = None,
+        limit: Annotated[int, Field(description="Max vulns to return (slimmed).", ge=1, le=100)] = 25,
+    ) -> dict[str, Any]:
+        """Look up known vulnerabilities for a package via OSV.dev (id/CVE/severity/CWE/fixed). Read-only."""
+        return sec.check_cve(package, ecosystem=ecosystem, version=version, limit=limit)
+
+    @mcp.tool(annotations=ToolAnnotations(title="Check GitHub advisories", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True))
+    def check_github_advisory(
+        cve_id: Annotated["str | None", Field(description="Filter by CVE id, e.g. CVE-2023-32681.")] = None,
+        ghsa_id: Annotated["str | None", Field(description="Filter by GHSA id.")] = None,
+        affects: Annotated["str | None", Field(description="Package name affected, e.g. 'requests'.")] = None,
+        ecosystem: Annotated["str | None", Field(description="pip | npm | go | rust | maven | ...")] = None,
+        severity: Annotated["str | None", Field(description="low | medium | high | critical.")] = None,
+        limit: Annotated[int, Field(description="Max advisories.", ge=1, le=100)] = 25,
+    ) -> dict[str, Any]:
+        """Query the GitHub global advisory database (slimmed). Read-only."""
+        return sec.check_github_advisory(cve_id=cve_id, ghsa_id=ghsa_id, affects=affects, ecosystem=ecosystem, severity=severity, limit=limit)
+
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)
