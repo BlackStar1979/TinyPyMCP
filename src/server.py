@@ -842,6 +842,66 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         tool argument. The server enforces what operations exist."""
         return vps_call_op(method, path, body, channel)
 
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Estate status",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    async def estate_status(
+        include_containers: Annotated[bool, Field(description="Include host container list (docker ps).")] = True,
+        include_monitors: Annotated[bool, Field(description="Include Uptime Kuma monitor health.")] = True,
+        include_channel: Annotated[bool, Field(description="Include the bounded VPS channel /v1/status probe.")] = True,
+    ) -> dict[str, Any]:
+        """Machine-readable health snapshot of the ROMION estate — the data layer
+        behind the estate dashboard. Aggregates the live MCP tool count, host
+        containers, Uptime Kuma monitors and the bounded VPS channel. Fail-open
+        per section: a failing subsystem is reported as an error inside its
+        section, never crashing the snapshot. Read-only."""
+        from datetime import datetime, timezone
+        snap: dict[str, Any] = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "sections": {},
+        }
+        secs = snap["sections"]
+
+        try:
+            tools = await mcp.list_tools()
+            secs["mcp"] = {"ok": True, "tool_count": len(tools), "endpoint": "/mcp/v5"}
+        except Exception as e:  # pragma: no cover - defensive
+            secs["mcp"] = {"ok": False, "error": str(e)}
+
+        if include_containers:
+            try:
+                from src.vps import dockerctl as _dctl
+                r = _dctl.docker(["ps", "--format", "{{.Names}}|{{.Status}}|{{.Image}}"])
+                rows = [ln for ln in (r.get("stdout") or "").splitlines() if ln.strip()]
+                items = [dict(zip(("name", "status", "image"), ln.split("|", 2))) for ln in rows]
+                secs["containers"] = {"ok": bool(r.get("ok")), "count": len(items), "items": items}
+            except Exception as e:
+                secs["containers"] = {"ok": False, "error": str(e)}
+
+        if include_monitors:
+            try:
+                from src import kuma_client as _kumac
+                ms = _kumac.monitor_status()
+                mons = ms.get("monitors", [])
+                # uptime-kuma heartbeat status: 1=up, 0=down, 2=pending, 3=maintenance
+                up = sum(1 for m in mons if m.get("status") == 1)
+                secs["monitors"] = {"ok": True, "count": len(mons), "up": up, "items": mons}
+            except Exception as e:
+                secs["monitors"] = {"ok": False, "error": str(e)}
+
+        if include_channel:
+            try:
+                ch = vps_call_op("GET", "/v1/status", None, None)
+                secs["vps_channel"] = {"ok": ch.get("ok", ch.get("status") == 200), "raw": ch}
+            except Exception as e:
+                secs["vps_channel"] = {"ok": False, "error": str(e)}
+
+        snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
+        return snap
+
     # ── Cloudflare admin (token from ~/.romion/cloudflare.json, never an arg) ──
 
     @mcp.tool(
