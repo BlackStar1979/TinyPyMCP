@@ -1355,6 +1355,35 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """List the experiment types / resource profiles / schema the governance layer understands."""
         return simmf.catalog()
 
+    # --- SIM job registry, stage 2 (persist + state + audit; STILL NO execution).
+    # submit only records `pending_approval`; approval/compute deferred (ADR). ---
+    from src.sim import registry as simreg
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: submit job (registry)", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=False))
+    def sim_submit_job(
+        manifest: Annotated[dict, Field(description="Job manifest (romion.sim.job_manifest.v1). Validated then persisted as pending_approval.")],
+    ) -> dict[str, Any]:
+        """Validate a manifest and persist it to the job registry as
+        `pending_approval`. NOTHING is executed — heavy compute belongs to a
+        separate future plane and approval is a deferred human step (ADR). Use
+        sim_submit_job_dry_run first to see the plan."""
+        return simreg.submit(manifest, actor="agent")
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: job status", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_job_status(
+        job_id: Annotated[str, Field(description="Job id to read.")],
+    ) -> dict[str, Any]:
+        """Read a registered job's state, manifest and full audit trail."""
+        return simreg.get(job_id)
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: list jobs", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_list_jobs(
+        state: Annotated["str | None", Field(description="Optional state filter (e.g. pending_approval).")] = None,
+        limit: Annotated[int, Field(description="Max jobs (newest first).", ge=1, le=500)] = 50,
+    ) -> dict[str, Any]:
+        """List registered jobs (newest first), optionally filtered by state."""
+        return simreg.list_jobs(state, limit)
+
     # --- Research / security plane (read-only): CVE + GitHub advisory lookup. ---
     from src.net import security as sec
 
