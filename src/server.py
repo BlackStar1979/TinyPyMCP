@@ -858,49 +858,13 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         containers, Uptime Kuma monitors and the bounded VPS channel. Fail-open
         per section: a failing subsystem is reported as an error inside its
         section, never crashing the snapshot. Read-only."""
-        from datetime import datetime, timezone
-        snap: dict[str, Any] = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "sections": {},
-        }
-        secs = snap["sections"]
-
-        try:
-            tools = await mcp.list_tools()
-            secs["mcp"] = {"ok": True, "tool_count": len(tools), "endpoint": "/mcp/v5"}
-        except Exception as e:  # pragma: no cover - defensive
-            secs["mcp"] = {"ok": False, "error": str(e)}
-
-        if include_containers:
-            try:
-                from src.vps import dockerctl as _dctl
-                r = _dctl.docker(["ps", "--format", "{{.Names}}|{{.Status}}|{{.Image}}"])
-                rows = [ln for ln in (r.get("stdout") or "").splitlines() if ln.strip()]
-                items = [dict(zip(("name", "status", "image"), ln.split("|", 2))) for ln in rows]
-                secs["containers"] = {"ok": bool(r.get("ok")), "count": len(items), "items": items}
-            except Exception as e:
-                secs["containers"] = {"ok": False, "error": str(e)}
-
-        if include_monitors:
-            try:
-                from src import kuma_client as _kumac
-                ms = _kumac.monitor_status()
-                mons = ms.get("monitors", [])
-                # uptime-kuma heartbeat status: 1=up, 0=down, 2=pending, 3=maintenance
-                up = sum(1 for m in mons if m.get("status") == 1)
-                secs["monitors"] = {"ok": True, "count": len(mons), "up": up, "items": mons}
-            except Exception as e:
-                secs["monitors"] = {"ok": False, "error": str(e)}
-
-        if include_channel:
-            try:
-                ch = vps_call_op("GET", "/v1/status", None, None)
-                secs["vps_channel"] = {"ok": ch.get("ok", ch.get("status") == 200), "raw": ch}
-            except Exception as e:
-                secs["vps_channel"] = {"ok": False, "error": str(e)}
-
-        snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
-        return snap
+        from src.estate import collect_estate
+        return await collect_estate(
+            mcp,
+            include_containers=include_containers,
+            include_monitors=include_monitors,
+            include_channel=include_channel,
+        )
 
     # ── Cloudflare admin (token from ~/.romion/cloudflare.json, never an arg) ──
 
@@ -1418,6 +1382,45 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
     if _oauth_provider is not None:
         from src.oauth.app import register_operator_login
         register_operator_login(mcp, _oauth_provider)
+
+    # Estate dashboard on the EXISTING tunnel (no new Worker/tunnel/connector).
+    # Read-only health view + JSON, gated by the operator secret (?key= or Bearer).
+    # key-in-URL is acceptable for an operator-only infra page on v1; harden later
+    # behind Cloudflare Access. Custom routes survive the profile prune below.
+    import json as _json
+    import secrets as _secrets
+    from starlette.responses import (
+        HTMLResponse as _HTMLResp,
+        JSONResponse as _JSONResp,
+        PlainTextResponse as _PlainResp,
+    )
+    from src.estate import (
+        collect_estate as _collect_estate,
+        DASHBOARD_HTML as _DASH_HTML,
+        LOGIN_HTML as _DASH_LOGIN,
+    )
+
+    def _dash_authorized(request) -> bool:
+        if not operator_secret:
+            return True  # no secret configured (dev/bearer) -> open
+        key = request.query_params.get("key") or ""
+        auth = request.headers.get("authorization", "")
+        if not key and auth.lower().startswith("bearer "):
+            key = auth[7:]
+        return bool(key) and _secrets.compare_digest(key, operator_secret)
+
+    @mcp.custom_route("/estate.json", methods=["GET"])
+    async def _estate_json(request):
+        if not _dash_authorized(request):
+            return _PlainResp("unauthorized", status_code=401)
+        return _JSONResp(await _collect_estate(mcp))
+
+    @mcp.custom_route("/dashboard", methods=["GET"])
+    async def _estate_dashboard(request):
+        if not _dash_authorized(request):
+            return _HTMLResp(_DASH_LOGIN, status_code=401)
+        key = request.query_params.get("key", "")
+        return _HTMLResp(_DASH_HTML.replace('"__KEY__"', _json.dumps(key)))
 
     # Profile gate: prune the registered surface to the union of selected
     # profiles. None = expose all (default). The active profiles ARE the
