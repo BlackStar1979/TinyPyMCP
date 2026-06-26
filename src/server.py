@@ -51,7 +51,7 @@ from src.net.fetch import check_npm_package as check_npm_op, check_pypi_package 
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
-from src.vps.channel import call as vps_call_op
+from src.vps.channel import call as vps_call_op, call_async as vps_call_async
 from src.cf import client as cf
 from src.utils.audit import audit
 
@@ -829,7 +829,7 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             readOnlyHint=False, idempotentHint=False, destructiveHint=True, openWorldHint=True,
         )
     )
-    def vps_request(
+    async def vps_request(
         method: Annotated[Literal["GET", "POST", "PUT", "DELETE", "PATCH"], Field(description="HTTP method.")],
         path: Annotated[str, Field(description="Path on the channel, e.g. '/v1/exec/run' or '/v1/compose/demo/up'. Appended to the configured base_url.", min_length=1)],
         body: Annotated[dict[str, Any] | None, Field(description="Optional JSON body.")] = None,
@@ -839,8 +839,9 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         (router or deploy). The path is appended to the channel's base_url, so
         only that one host is reachable. Credentials come from the config file on
         disk — never from arguments. The config path is fixed server-side, not a
-        tool argument. The server enforces what operations exist."""
-        return vps_call_op(method, path, body, channel)
+        tool argument. The server enforces what operations exist. Actively
+        cancellable on client disconnect."""
+        return await vps_call_async(method, path, body, channel)
 
     @mcp.tool(
         annotations=ToolAnnotations(

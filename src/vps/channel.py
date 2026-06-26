@@ -126,13 +126,40 @@ def call(
 
     with httpx.Client(timeout=timeout, follow_redirects=False) as c:
         r = c.request(method, url, headers=_headers(cfg), json=body if body is not None else None)
-        text = r.text
-        truncated = len(text) > MAX_BODY_CHARS
-        return {
-            "url": url,
-            "status": r.status_code,
-            "ok": r.is_success,
-            "content_type": r.headers.get("content-type", ""),
-            "body": text[:MAX_BODY_CHARS],
-            "body_truncated": truncated,
-        }
+        return _shape(url, r)
+
+
+async def call_async(
+    method: str,
+    path: str,
+    body: Any | None = None,
+    channel: str | None = None,
+    config_ref: str | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Async, actively-cancellable variant of call (D6): on client disconnect the
+    request task is cancelled and the AsyncClient context tears the connection
+    down. Used by the vps_request tool (arbitrary, possibly long deploy calls)."""
+    method = method.upper()
+    if method not in _METHODS:
+        raise ValueError(f"unsupported method: {method}")
+    cfg = load_channel_config(channel, config_ref)
+    timeout = max(1, min(int(timeout), MAX_TIMEOUT))
+    base = str(cfg["base_url"]).rstrip("/")
+    url = f"{base}/{path.lstrip('/')}"
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as c:
+        r = await c.request(method, url, headers=_headers(cfg), json=body if body is not None else None)
+        return _shape(url, r)
+
+
+def _shape(url: str, r: "httpx.Response") -> dict[str, Any]:
+    text = r.text
+    truncated = len(text) > MAX_BODY_CHARS
+    return {
+        "url": url,
+        "status": r.status_code,
+        "ok": r.is_success,
+        "content_type": r.headers.get("content-type", ""),
+        "body": text[:MAX_BODY_CHARS],
+        "body_truncated": truncated,
+    }
