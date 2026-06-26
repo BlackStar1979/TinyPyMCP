@@ -1430,14 +1430,19 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         LOGIN_HTML as _DASH_LOGIN,
     )
 
+    # Prefer a DEDICATED dashboard token over the OAuth operator secret, so the
+    # value that lands in URLs / CF logs / browser history is NOT the same secret
+    # that gates OAuth. Fail CLOSED if neither is configured.
+    _dash_token = os.environ.get("MCP_DASHBOARD_TOKEN", "").strip() or (operator_secret or "")
+
     def _dash_authorized(request) -> bool:
-        if not operator_secret:
-            return True  # no secret configured (dev/bearer) -> open
+        if not _dash_token:
+            return False  # fail-closed: no dashboard token configured -> deny
         key = request.query_params.get("key") or ""
         auth = request.headers.get("authorization", "")
         if not key and auth.lower().startswith("bearer "):
             key = auth[7:]
-        return bool(key) and _secrets.compare_digest(key, operator_secret)
+        return bool(key) and _secrets.compare_digest(key, _dash_token)
 
     @mcp.custom_route("/estate.json", methods=["GET"])
     async def _estate_json(request):
