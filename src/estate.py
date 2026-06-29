@@ -71,11 +71,58 @@ async def collect_estate(
 # ── Human view (self-contained, no external deps) ───────────────────────────
 
 LOGIN_HTML = """<!doctype html><meta charset="utf-8">
-<title>ROMION estate — unauthorized</title>
-<body style="font-family:system-ui;background:#0b0e14;color:#c9d1d9;max-width:30rem;margin:5rem auto;padding:1rem">
-<h2>ROMION estate dashboard</h2>
-<p>Authorization required. Append <code>?key=&lt;operator-secret&gt;</code> to the URL.</p>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ROMION estate — login</title>
+<body style="font-family:system-ui;background:#0b0e14;color:#c9d1d9;max-width:24rem;margin:5rem auto;padding:1rem">
+<h2>ROMION estate</h2>
+<form method="post" action="/dashboard/login">
+  <p><input type="password" name="token" placeholder="dashboard token" autofocus
+     style="width:100%;padding:.55rem;background:#11161f;border:1px solid #21262d;border-radius:.4rem;color:#c9d1d9"></p>
+  <button style="padding:.5rem 1.1rem;background:#1f6feb;color:#fff;border:0;border-radius:.4rem">Sign in</button>
+</form>
+<p style="color:#7d8590;font-size:.8rem">Token-gated; sets an HttpOnly session cookie. No secret in the URL.</p>
 </body>"""
+
+# ── Session module (in-process; replaces the secret-in-URL key) ─────────────
+# The dashboard token authenticates a LOGIN; thereafter a random opaque session
+# id in an HttpOnly/Secure/SameSite=Strict cookie authorizes requests. In-process
+# store (single long-lived server); fine for an operator-only page.
+import secrets as _secrets
+import time as _time
+
+SESSION_COOKIE = "romion_dash"
+SESSION_TTL = 12 * 3600
+_SESSIONS: dict[str, float] = {}
+
+
+def new_session() -> str:
+    _prune_sessions()
+    sid = _secrets.token_urlsafe(32)
+    _SESSIONS[sid] = _time.time() + SESSION_TTL
+    return sid
+
+
+def session_valid(sid: str | None) -> bool:
+    if not sid:
+        return False
+    exp = _SESSIONS.get(sid)
+    if not exp:
+        return False
+    if exp < _time.time():
+        _SESSIONS.pop(sid, None)
+        return False
+    return True
+
+
+def drop_session(sid: str | None) -> None:
+    if sid:
+        _SESSIONS.pop(sid, None)
+
+
+def _prune_sessions() -> None:
+    now = _time.time()
+    for k in [k for k, v in _SESSIONS.items() if v < now]:
+        _SESSIONS.pop(k, None)
 
 DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -103,13 +150,13 @@ DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <div class="sub">tiny-py-mcp.romionologic.dev · refreshed <span id="ts">—</span> · auto every 15s</div>
 <div id="root" class="grid"></div>
 <script>
-const KEY="__KEY__";
 function pill(ok){return '<span class="pill '+(ok?'ok':'bad')+'">'+(ok?'OK':'FAIL')+'</span>';}
 function card(title,body){return '<div class="card"><h2>'+title+'</h2>'+body+'</div>';}
 function row(name,meta){return '<div class="row"><span class="name">'+name+'</span><span class="meta">'+meta+'</span></div>';}
 async function load(){
   try{
-    const r=await fetch('/estate.json?key='+encodeURIComponent(KEY),{cache:'no-store'});
+    const r=await fetch('/estate.json',{cache:'no-store',credentials:'same-origin'});
+    if(r.status===401){location.href='/dashboard/login';return;}
     if(!r.ok){document.getElementById('root').innerHTML='<div class="card err">/estate.json '+r.status+'</div>';return;}
     const d=await r.json();const s=d.sections||{};
     document.getElementById('health').className='pill '+(d.healthy?'ok':'bad');

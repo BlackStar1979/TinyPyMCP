@@ -1414,48 +1414,72 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         register_operator_login(mcp, _oauth_provider)
 
     # Estate dashboard on the EXISTING tunnel (no new Worker/tunnel/connector).
-    # Read-only health view + JSON, gated by the operator secret (?key= or Bearer).
-    # key-in-URL is acceptable for an operator-only infra page on v1; harden later
-    # behind Cloudflare Access. Custom routes survive the profile prune below.
-    import json as _json
+    # Session-based: a token authenticates LOGIN, then an HttpOnly cookie
+    # authorizes requests — NO secret in the URL. Custom routes survive the
+    # profile prune below. Hardening TODO: front with Cloudflare Access.
     import secrets as _secrets
     from starlette.responses import (
         HTMLResponse as _HTMLResp,
         JSONResponse as _JSONResp,
         PlainTextResponse as _PlainResp,
+        RedirectResponse as _RedirResp,
     )
     from src.estate import (
         collect_estate as _collect_estate,
         DASHBOARD_HTML as _DASH_HTML,
         LOGIN_HTML as _DASH_LOGIN,
+        SESSION_COOKIE as _DASH_COOKIE,
+        SESSION_TTL as _DASH_TTL,
+        new_session as _new_session,
+        session_valid as _session_valid,
+        drop_session as _drop_session,
     )
 
-    # Prefer a DEDICATED dashboard token over the OAuth operator secret, so the
-    # value that lands in URLs / CF logs / browser history is NOT the same secret
-    # that gates OAuth. Fail CLOSED if neither is configured.
+    # Prefer a DEDICATED MCP_DASHBOARD_TOKEN over the OAuth operator secret (so the
+    # login credential is decoupled from OAuth). Fail CLOSED if neither is set.
     _dash_token = os.environ.get("MCP_DASHBOARD_TOKEN", "").strip() or (operator_secret or "")
 
-    def _dash_authorized(request) -> bool:
+    def _bearer_ok(request) -> bool:
+        # Programmatic access (agent) via Authorization: Bearer <dash token>.
         if not _dash_token:
-            return False  # fail-closed: no dashboard token configured -> deny
-        key = request.query_params.get("key") or ""
+            return False
         auth = request.headers.get("authorization", "")
-        if not key and auth.lower().startswith("bearer "):
-            key = auth[7:]
-        return bool(key) and _secrets.compare_digest(key, _dash_token)
+        return auth.lower().startswith("bearer ") and _secrets.compare_digest(auth[7:], _dash_token)
+
+    def _session_ok(request) -> bool:
+        return _session_valid(request.cookies.get(_DASH_COOKIE))
+
+    @mcp.custom_route("/dashboard/login", methods=["GET", "POST"])
+    async def _dash_login(request):
+        if request.method == "GET":
+            return _HTMLResp(_DASH_LOGIN)
+        form = await request.form()
+        token = str(form.get("token", ""))
+        if not _dash_token or not _secrets.compare_digest(token, _dash_token):
+            return _HTMLResp(_DASH_LOGIN, status_code=401)
+        resp = _RedirResp("/dashboard", status_code=303)
+        resp.set_cookie(_DASH_COOKIE, _new_session(), max_age=_DASH_TTL,
+                        httponly=True, secure=True, samesite="strict", path="/")
+        return resp
+
+    @mcp.custom_route("/dashboard/logout", methods=["POST"])
+    async def _dash_logout(request):
+        _drop_session(request.cookies.get(_DASH_COOKIE))
+        resp = _RedirResp("/dashboard/login", status_code=303)
+        resp.delete_cookie(_DASH_COOKIE, path="/")
+        return resp
 
     @mcp.custom_route("/estate.json", methods=["GET"])
     async def _estate_json(request):
-        if not _dash_authorized(request):
+        if not (_session_ok(request) or _bearer_ok(request)):
             return _PlainResp("unauthorized", status_code=401)
         return _JSONResp(await _collect_estate(mcp))
 
     @mcp.custom_route("/dashboard", methods=["GET"])
     async def _estate_dashboard(request):
-        if not _dash_authorized(request):
+        if not _session_ok(request):
             return _HTMLResp(_DASH_LOGIN, status_code=401)
-        key = request.query_params.get("key", "")
-        return _HTMLResp(_DASH_HTML.replace('"__KEY__"', _json.dumps(key)))
+        return _HTMLResp(_DASH_HTML)
 
     # Profile gate: prune the registered surface to the union of selected
     # profiles. None = expose all (default). The active profiles ARE the
