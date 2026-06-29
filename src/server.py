@@ -103,7 +103,6 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
     if hasattr(mcp, "settings"):
         mcp.settings.streamable_http_path = "/mcp/v5"
-        mcp.settings.sse_path = "/mcp/v5"
         try:
             mcp.settings.json_response = False
             mcp.settings.log_level = "info"
@@ -1638,10 +1637,14 @@ def main() -> None:
 
         host = args.host
         port = args.port
-        transport = "streamable-http" if args.transport in ("http", "streamable-http") else "sse"
-        path = getattr(mcp.settings, "streamable_http_path", "/mcp/v5") if transport == "streamable-http" else getattr(mcp.settings, "sse_path", "/mcp/v5")
-
-        app = mcp.streamable_http_app() if transport == "streamable-http" else mcp.sse_app()
+        # Standalone SSE transport removed (deprecated; SSE is only the per-request
+        # reply stream inside Streamable HTTP — see the transport assessment in www).
+        # 'sse'/'http' are kept as back-compat aliases that now run streamable-http.
+        if args.transport == "sse":
+            print("[TinyPyMCP] note: --transport sse is deprecated; running streamable-http")
+        transport = "streamable-http"
+        path = getattr(mcp.settings, "streamable_http_path", "/mcp/v5")
+        app = mcp.streamable_http_app()
 
         if auth_mode == "oauth":
             # FastMCP already mounted the OAuth routes + endpoint protection
