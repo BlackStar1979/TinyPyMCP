@@ -16,10 +16,16 @@ import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, Field
+
+
+class _EngineVersionPrompt(BaseModel):
+    """Elicitation schema (primitive fields only, per spec) for a missing
+    required manifest field."""
+    engine_version: str
 
 from src.utils.file_ops import (
     append_file as append_file_op,
@@ -1359,14 +1365,34 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
     from src.sim import registry as simreg
 
     @mcp.tool(annotations=ToolAnnotations(title="SIM: submit job (registry)", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=False))
-    def sim_submit_job(
+    async def sim_submit_job(
         manifest: Annotated[dict, Field(description="Job manifest (romion.sim.job_manifest.v1). Validated then persisted as pending_approval.")],
+        ctx: Context,
     ) -> dict[str, Any]:
         """Validate a manifest and persist it to the job registry as
         `pending_approval`. NOTHING is executed — heavy compute belongs to a
         separate future plane and approval is a deferred human step (ADR). Use
-        sim_submit_job_dry_run first to see the plan."""
-        return simreg.submit(manifest, actor="agent")
+        sim_submit_job_dry_run first to see the plan. If the required
+        `engine_version` is missing, the server elicits it from the client
+        (SEP-1034/1036/1330); clients without elicitation degrade to the normal
+        validation error."""
+        m = dict(manifest)
+        if not m.get("engine_version"):
+            try:
+                r = await ctx.elicit(
+                    message="Manifest is missing the required 'engine_version'. Provide it:",
+                    schema=_EngineVersionPrompt,
+                )
+                if r.action == "accept" and r.data:
+                    m["engine_version"] = r.data.engine_version
+                elif r.action == "decline":
+                    return {"ok": False, "errors": ["engine_version is required (elicitation declined)"]}
+                elif r.action == "cancel":
+                    return {"ok": False, "errors": ["submission cancelled during elicitation"]}
+            except Exception:
+                # client doesn't support elicitation -> fall through to normal validation
+                pass
+        return simreg.submit(m, actor="agent")
 
     @mcp.tool(annotations=ToolAnnotations(title="SIM: job status", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
     def sim_job_status(
