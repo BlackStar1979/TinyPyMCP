@@ -38,6 +38,7 @@ async def collect_estate(
     include_monitors: bool = True,
     include_channel: bool = True,
     include_cloudflare: bool = True,
+    include_r2: bool = True,
 ) -> dict[str, Any]:
     """Aggregate the estate snapshot. `mcp` is the FastMCP instance (for the live
     tool count). All sub-aggregations are fault-isolated."""
@@ -97,6 +98,17 @@ async def collect_estate(
             }
         except Exception as e:
             secs["cloudflare"] = {"ok": False, "error": str(e)}
+
+    if include_r2:
+        try:
+            from src.cf import r2 as _r2
+            bf = dict(_cached("r2_backup", 300, _r2.backup_freshness))
+            # surface staleness in the health rollup while keeping the detail
+            if bf.get("ok") and bf.get("stale"):
+                bf["ok"] = False
+            secs["r2_backup"] = bf
+        except Exception as e:
+            secs["r2_backup"] = {"ok": False, "error": str(e)}
 
     snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
     return snap
@@ -213,6 +225,7 @@ async function load(){
     if(s.vps_channel)h+=card('VPS channel '+pill(s.vps_channel.ok),'<div class="meta">'+(s.vps_channel.error||'/v1/status reachable')+'</div>');
     if(s.containers){let b=s.containers.error?('<div class="err">'+s.containers.error+'</div>'):(s.containers.items||[]).map(c=>row(c.name,c.status)).join('');h+=card('Containers ('+(s.containers.count??0)+') '+pill(s.containers.ok),b);}
     if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status)).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
+    if(s.r2_backup){let r=s.r2_backup;let b=r.error?('<div class="err">'+r.error+'</div>'):(row('newest',r.age_hours!=null?(r.age_hours+'h ago'):'—')+row('objects',r.object_count)+row('size',(r.total_bytes/1048576).toFixed(1)+' MB')+(r.stale?'<div class="err">STALE (&gt;30h)</div>':''));h+=card('R2 backup '+pill(r.ok),b);}
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
