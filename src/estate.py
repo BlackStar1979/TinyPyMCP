@@ -39,6 +39,7 @@ async def collect_estate(
     include_channel: bool = True,
     include_cloudflare: bool = True,
     include_r2: bool = True,
+    include_ovh: bool = True,
 ) -> dict[str, Any]:
     """Aggregate the estate snapshot. `mcp` is the FastMCP instance (for the live
     tool count). All sub-aggregations are fault-isolated."""
@@ -109,6 +110,30 @@ async def collect_estate(
             secs["r2_backup"] = bf
         except Exception as e:
             secs["r2_backup"] = {"ok": False, "error": str(e)}
+
+    if include_ovh:
+        try:
+            import os
+            from src import ovh_client as _ovh
+            name = os.environ.get("MCP_OVH_VPS_NAME", "vps-2f267042.vps.ovh.net")
+            res = _cached("ovh_host", 300, lambda: _ovh.vps_info(service_name=name, config_ref="/secrets/ovh-estate.json"))
+            if res.get("ok") is False:
+                secs["ovh_host"] = {"ok": False, "error": res.get("error") or res.get("message")}
+            else:
+                d = res.get("result") or {}
+                m = d.get("model") or {}
+                secs["ovh_host"] = {
+                    "ok": d.get("state") == "running",
+                    "state": d.get("state"),
+                    "offer": m.get("offer"),
+                    "vcore": d.get("vcore"),
+                    "memory_mb": d.get("memoryLimit"),
+                    "disk_gb": m.get("disk"),
+                    "zone": d.get("zone"),
+                    "netboot": d.get("netbootMode"),
+                }
+        except Exception as e:
+            secs["ovh_host"] = {"ok": False, "error": str(e)}
 
     snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
     return snap
@@ -226,6 +251,7 @@ async function load(){
     if(s.containers){let b=s.containers.error?('<div class="err">'+s.containers.error+'</div>'):(s.containers.items||[]).map(c=>row(c.name,c.status)).join('');h+=card('Containers ('+(s.containers.count??0)+') '+pill(s.containers.ok),b);}
     if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status)).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
     if(s.r2_backup){let r=s.r2_backup;let b=r.error?('<div class="err">'+r.error+'</div>'):(row('newest',r.age_hours!=null?(r.age_hours+'h ago'):'—')+row('objects',r.object_count)+row('size',(r.total_bytes/1048576).toFixed(1)+' MB')+(r.stale?'<div class="err">STALE (&gt;30h)</div>':''));h+=card('R2 backup '+pill(r.ok),b);}
+    if(s.ovh_host){let o=s.ovh_host;let b=o.error?('<div class="err">'+o.error+'</div>'):(row('state',o.state)+row('offer',o.offer)+row('cpu/mem',o.vcore+' vCore / '+(o.memory_mb/1024)+' GB')+row('disk',o.disk_gb+' GB')+row('zone',o.zone));h+=card('OVH host '+pill(o.ok),b);}
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
