@@ -238,6 +238,7 @@ DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .meta{color:#7d8590;font-size:.78rem;text-align:right;white-space:nowrap}
   .big{font-size:1.6rem;font-weight:700}
   .err{color:#f85149;font-size:.8rem}
+  .simbtn{border:0;border-radius:.3rem;padding:.15rem .5rem;cursor:pointer;margin-left:.3rem;font-size:.75rem}
   a{color:#58a6ff}
 </style></head><body>
 <h1>ROMION estate <span id="health" class="pill"></span>
@@ -247,6 +248,8 @@ DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </h1>
 <div class="sub">tiny-py-mcp.romionologic.dev · logged in via <b>__VIA__</b> · refreshed <span id="ts">—</span> · auto 15s</div>
 <div id="root" class="grid"></div>
+<h2 style="font-size:.9rem;color:#7d8590;margin:1.4rem 0 .5rem;text-transform:uppercase;letter-spacing:.05em">SIM jobs</h2>
+<div id="sim"></div>
 <script>
 function pill(ok){return '<span class="pill '+(ok?'ok':'bad')+'">'+(ok?'OK':'FAIL')+'</span>';}
 function card(title,body){return '<div class="card"><h2>'+title+'</h2>'+body+'</div>';}
@@ -271,5 +274,27 @@ async function load(){
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
+async function simAct(id,action){
+  if(!confirm(action+' '+id+'?'))return;
+  await fetch('/sim/jobs/'+encodeURIComponent(id)+'/'+action,{method:'POST',credentials:'same-origin'});
+  loadSim();
+}
+async function loadSim(){
+  try{
+    const r=await fetch('/sim.json',{cache:'no-store',credentials:'same-origin'});
+    if(!r.ok){document.getElementById('sim').innerHTML='';return;}
+    const d=await r.json();const jobs=d.jobs||[];
+    if(!jobs.length){document.getElementById('sim').innerHTML='<div class="card"><div class="meta">no jobs in registry</div></div>';return;}
+    let h='<div class="card">';
+    for(const j of jobs){
+      const act=j.state==='pending_approval'?(' <button data-id="'+j.job_id+'" data-act="approve" class="simbtn ok">approve</button><button data-id="'+j.job_id+'" data-act="reject" class="simbtn bad">reject</button>'):'';
+      h+='<div class="row"><span class="name">'+j.job_id+'</span><span class="meta">'+j.state+act+'</span></div>';
+    }
+    h+='</div>';
+    document.getElementById('sim').innerHTML=h;
+    document.querySelectorAll('#sim .simbtn').forEach(b=>{b.onclick=()=>simAct(b.dataset.id,b.dataset.act);});
+  }catch(e){document.getElementById('sim').innerHTML='<div class="card err">'+e+'</div>';}
+}
 load();setInterval(load,15000);
+loadSim();setInterval(loadSim,15000);
 </script></body></html>"""

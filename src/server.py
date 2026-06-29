@@ -1483,6 +1483,35 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         via = _session_method(request.cookies.get(_DASH_COOKIE)) or "session"
         return _HTMLResp(_DASH_HTML.replace("__VIA__", via))
 
+    # SIM human-approval — session-gated (operator in the browser). NOT exposed as
+    # an agent tool and NOT Bearer-approvable, so the agent cannot self-approve a
+    # job it submitted: the pending_approval -> approved gate is a human action.
+    @mcp.custom_route("/sim.json", methods=["GET"])
+    async def _sim_json(request):
+        if not (_session_ok(request) or _bearer_ok(request)):
+            return _PlainResp("unauthorized", status_code=401)
+        from src.sim import registry as _reg
+        state = request.query_params.get("state")
+        return _JSONResp(_reg.list_jobs(state or None))
+
+    @mcp.custom_route("/sim/jobs/{job_id}/approve", methods=["POST"])
+    async def _sim_approve(request):
+        if not _session_ok(request):
+            return _PlainResp("unauthorized", status_code=401)
+        from src.sim import registry as _reg
+        form = await request.form()
+        return _JSONResp(_reg.approve(request.path_params["job_id"], actor="operator",
+                                      reason=str(form.get("reason", "")) or None))
+
+    @mcp.custom_route("/sim/jobs/{job_id}/reject", methods=["POST"])
+    async def _sim_reject(request):
+        if not _session_ok(request):
+            return _PlainResp("unauthorized", status_code=401)
+        from src.sim import registry as _reg
+        form = await request.form()
+        return _JSONResp(_reg.reject(request.path_params["job_id"], actor="operator",
+                                     reason=str(form.get("reason", "")) or None))
+
     # Profile gate: prune the registered surface to the union of selected
     # profiles. None = expose all (default). The active profiles ARE the
     # authorization boundary for which capability tiers this instance offers.

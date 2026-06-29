@@ -100,6 +100,51 @@ def submit(manifest: Any, actor: str = "agent") -> dict[str, Any]:
     }
 
 
+# Allowed state transitions (ADR §4). Stage 2 only wires pending_approval ->
+# approved|rejected (the human gate); the rest are declared for when the compute
+# layer lands. NO transition is autonomous — approve/reject is a human action via
+# a session-gated route, never an agent tool.
+_TRANSITIONS: dict[str, set[str]] = {
+    "pending_approval": {"approved", "rejected"},
+    "approved": {"queued", "rejected"},
+    "queued": {"running", "rejected"},
+    "running": {"completed", "failed"},
+    "completed": {"validated", "rejected"},
+    "failed": {"archived"},
+    "validated": {"archived"},
+    "rejected": {"archived"},
+}
+
+
+def set_state(job_id: str, to_state: str, actor: str, reason: str | None = None) -> dict[str, Any]:
+    """Transition a job, validating it against the allowed state machine. Audited."""
+    if to_state not in STATES:
+        return {"ok": False, "errors": [f"unknown state: {to_state}"]}
+    with _connect() as conn:
+        row = conn.execute("SELECT state FROM sim_jobs WHERE job_id=?", (job_id,)).fetchone()
+        if not row:
+            return {"ok": False, "errors": [f"job not found: {job_id}"]}
+        cur = row["state"]
+        if to_state not in _TRANSITIONS.get(cur, set()):
+            return {"ok": False, "errors": [f"illegal transition: {cur} -> {to_state}"]}
+        now = _now()
+        conn.execute("UPDATE sim_jobs SET state=?, actor=?, reason=?, updated_at=? WHERE job_id=?",
+                     (to_state, actor, reason, now, job_id))
+        conn.execute("INSERT INTO sim_job_events (job_id, from_state, to_state, actor, reason, ts)"
+                     " VALUES (?,?,?,?,?,?)", (job_id, cur, to_state, actor, reason, now))
+        conn.commit()
+    return {"ok": True, "job_id": job_id, "from": cur, "state": to_state}
+
+
+def approve(job_id: str, actor: str = "operator", reason: str | None = None) -> dict[str, Any]:
+    """Human gate: pending_approval -> approved. Still does NOT execute the job."""
+    return set_state(job_id, "approved", actor, reason)
+
+
+def reject(job_id: str, actor: str = "operator", reason: str | None = None) -> dict[str, Any]:
+    return set_state(job_id, "rejected", actor, reason)
+
+
 def get(job_id: str) -> dict[str, Any]:
     """Read one job's state + manifest + audit trail."""
     with _connect() as conn:
