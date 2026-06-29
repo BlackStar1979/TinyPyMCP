@@ -92,26 +92,33 @@ import time as _time
 
 SESSION_COOKIE = "romion_dash"
 SESSION_TTL = 12 * 3600
-_SESSIONS: dict[str, float] = {}
+# sid -> (expiry_epoch, auth_method). method is shown as "logged in via …" and
+# will extend to oauth/account when those login paths land.
+_SESSIONS: dict[str, tuple[float, str]] = {}
 
 
-def new_session() -> str:
+def new_session(method: str = "token") -> str:
     _prune_sessions()
     sid = _secrets.token_urlsafe(32)
-    _SESSIONS[sid] = _time.time() + SESSION_TTL
+    _SESSIONS[sid] = (_time.time() + SESSION_TTL, method)
     return sid
 
 
 def session_valid(sid: str | None) -> bool:
     if not sid:
         return False
-    exp = _SESSIONS.get(sid)
-    if not exp:
+    rec = _SESSIONS.get(sid)
+    if not rec:
         return False
-    if exp < _time.time():
+    if rec[0] < _time.time():
         _SESSIONS.pop(sid, None)
         return False
     return True
+
+
+def session_method(sid: str | None) -> str | None:
+    rec = _SESSIONS.get(sid) if sid else None
+    return rec[1] if rec else None
 
 
 def drop_session(sid: str | None) -> None:
@@ -121,7 +128,7 @@ def drop_session(sid: str | None) -> None:
 
 def _prune_sessions() -> None:
     now = _time.time()
-    for k in [k for k, v in _SESSIONS.items() if v < now]:
+    for k in [k for k, (exp, _m) in _SESSIONS.items() if exp < now]:
         _SESSIONS.pop(k, None)
 
 DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -146,8 +153,12 @@ DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
   .err{color:#f85149;font-size:.8rem}
   a{color:#58a6ff}
 </style></head><body>
-<h1>ROMION estate <span id="health" class="pill"></span></h1>
-<div class="sub">tiny-py-mcp.romionologic.dev · refreshed <span id="ts">—</span> · auto every 15s</div>
+<h1>ROMION estate <span id="health" class="pill"></span>
+  <form method="post" action="/dashboard/logout" style="display:inline;float:right">
+    <button style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:.4rem;padding:.3rem .75rem;cursor:pointer">Logout</button>
+  </form>
+</h1>
+<div class="sub">tiny-py-mcp.romionologic.dev · logged in via <b>__VIA__</b> · refreshed <span id="ts">—</span> · auto 15s</div>
 <div id="root" class="grid"></div>
 <script>
 function pill(ok){return '<span class="pill '+(ok?'ok':'bad')+'">'+(ok?'OK':'FAIL')+'</span>';}

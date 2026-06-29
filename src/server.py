@@ -1432,6 +1432,7 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         SESSION_TTL as _DASH_TTL,
         new_session as _new_session,
         session_valid as _session_valid,
+        session_method as _session_method,
         drop_session as _drop_session,
     )
 
@@ -1479,7 +1480,8 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
     async def _estate_dashboard(request):
         if not _session_ok(request):
             return _HTMLResp(_DASH_LOGIN, status_code=401)
-        return _HTMLResp(_DASH_HTML)
+        via = _session_method(request.cookies.get(_DASH_COOKIE)) or "session"
+        return _HTMLResp(_DASH_HTML.replace("__VIA__", via))
 
     # Profile gate: prune the registered surface to the union of selected
     # profiles. None = expose all (default). The active profiles ARE the
