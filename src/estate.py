@@ -14,12 +14,30 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+import time as _t
+
+# Small TTL cache so the 15s dashboard refresh does not hammer slow/rate-limited
+# upstreams (Cloudflare API). key -> (expiry_epoch, value).
+_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def _cached(key: str, ttl: float, fn) -> Any:
+    now = _t.time()
+    rec = _CACHE.get(key)
+    if rec and rec[0] > now:
+        return rec[1]
+    val = fn()
+    _CACHE[key] = (now + ttl, val)
+    return val
+
+
 async def collect_estate(
     mcp: Any,
     *,
     include_containers: bool = True,
     include_monitors: bool = True,
     include_channel: bool = True,
+    include_cloudflare: bool = True,
 ) -> dict[str, Any]:
     """Aggregate the estate snapshot. `mcp` is the FastMCP instance (for the live
     tool count). All sub-aggregations are fault-isolated."""
@@ -63,6 +81,22 @@ async def collect_estate(
             secs["vps_channel"] = {"ok": ch.get("ok", ch.get("status") == 200), "raw": ch}
         except Exception as e:
             secs["vps_channel"] = {"ok": False, "error": str(e)}
+
+    if include_cloudflare:
+        try:
+            from src.cf import client as _cf
+            cf = _cached("cf", 120, lambda: {"dns": _cf.list_dns(), "tunnels": _cf.list_tunnels()})
+            dns, tuns = cf["dns"], cf["tunnels"]
+            dns_items = dns.get("result") if isinstance(dns.get("result"), list) else []
+            tun_items = tuns.get("result") if isinstance(tuns.get("result"), list) else []
+            secs["cloudflare"] = {
+                "ok": bool(dns.get("ok", True)) and bool(tuns.get("ok", True)),
+                "dns_count": len(dns_items),
+                "tunnels": [{"name": t.get("name"), "status": t.get("status")} for t in tun_items],
+                "cache_ttl_s": 120,
+            }
+        except Exception as e:
+            secs["cloudflare"] = {"ok": False, "error": str(e)}
 
     snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
     return snap
@@ -178,6 +212,7 @@ async function load(){
     if(s.monitors)h+=card('Monitors '+pill(s.monitors.ok),s.monitors.error?('<div class="err">'+s.monitors.error+'</div>'):('<div class="big">'+s.monitors.up+'/'+s.monitors.count+'</div><div class="meta">up</div>'));
     if(s.vps_channel)h+=card('VPS channel '+pill(s.vps_channel.ok),'<div class="meta">'+(s.vps_channel.error||'/v1/status reachable')+'</div>');
     if(s.containers){let b=s.containers.error?('<div class="err">'+s.containers.error+'</div>'):(s.containers.items||[]).map(c=>row(c.name,c.status)).join('');h+=card('Containers ('+(s.containers.count??0)+') '+pill(s.containers.ok),b);}
+    if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status)).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
