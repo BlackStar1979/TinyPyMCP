@@ -87,14 +87,30 @@ async def collect_estate(
     if include_cloudflare:
         try:
             from src.cf import client as _cf
-            cf = _cached("cf", 120, lambda: {"dns": _cf.list_dns(), "tunnels": _cf.list_tunnels()})
-            dns, tuns = cf["dns"], cf["tunnels"]
+
+            def _fetch_cf():
+                dns = _cf.list_dns()
+                tuns = _cf.list_tunnels()
+                tlist = tuns.get("result") if isinstance(tuns.get("result"), list) else []
+                ingress = {}
+                for t in tlist:
+                    tid = t.get("id")
+                    if not tid:
+                        continue
+                    cfg = _cf.get_tunnel_config(tid)
+                    rules = (((cfg.get("result") or {}).get("config") or {}).get("ingress")) or []
+                    ingress[tid] = [r.get("hostname") for r in rules if r.get("hostname")]
+                return {"dns": dns, "tunnels": tuns, "ingress": ingress}
+
+            cf = _cached("cf", 120, _fetch_cf)
+            dns, tuns, ingress = cf["dns"], cf["tunnels"], cf.get("ingress", {})
             dns_items = dns.get("result") if isinstance(dns.get("result"), list) else []
             tun_items = tuns.get("result") if isinstance(tuns.get("result"), list) else []
             secs["cloudflare"] = {
                 "ok": bool(dns.get("ok", True)) and bool(tuns.get("ok", True)),
                 "dns_count": len(dns_items),
-                "tunnels": [{"name": t.get("name"), "status": t.get("status")} for t in tun_items],
+                "tunnels": [{"name": t.get("name"), "status": t.get("status"),
+                             "ingress": ingress.get(t.get("id"), [])} for t in tun_items],
                 "cache_ttl_s": 120,
             }
         except Exception as e:
@@ -249,7 +265,7 @@ async function load(){
     if(s.monitors)h+=card('Monitors '+pill(s.monitors.ok),s.monitors.error?('<div class="err">'+s.monitors.error+'</div>'):('<div class="big">'+s.monitors.up+'/'+s.monitors.count+'</div><div class="meta">up</div>'));
     if(s.vps_channel)h+=card('VPS channel '+pill(s.vps_channel.ok),'<div class="meta">'+(s.vps_channel.error||'/v1/status reachable')+'</div>');
     if(s.containers){let b=s.containers.error?('<div class="err">'+s.containers.error+'</div>'):(s.containers.items||[]).map(c=>row(c.name,c.status)).join('');h+=card('Containers ('+(s.containers.count??0)+') '+pill(s.containers.ok),b);}
-    if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status)).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
+    if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status+' · '+((t.ingress||[]).length)+' routes')).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
     if(s.r2_backup){let r=s.r2_backup;let b=r.error?('<div class="err">'+r.error+'</div>'):(row('newest',r.age_hours!=null?(r.age_hours+'h ago'):'—')+row('objects',r.object_count)+row('size',(r.total_bytes/1048576).toFixed(1)+' MB')+(r.stale?'<div class="err">STALE (&gt;30h)</div>':''));h+=card('R2 backup '+pill(r.ok),b);}
     if(s.ovh_host){let o=s.ovh_host;let b=o.error?('<div class="err">'+o.error+'</div>'):(row('state',o.state)+row('offer',o.offer)+row('cpu/mem',o.vcore+' vCore / '+(o.memory_mb/1024)+' GB')+row('disk',o.disk_gb+' GB')+row('zone',o.zone));h+=card('OVH host '+pill(o.ok),b);}
     document.getElementById('root').innerHTML=h;
