@@ -182,15 +182,23 @@ async def collect_estate(
                                     m[key] += qty
                                     m["price"] += price
                                     break
+                models_out = {m: {"input": v["input"], "output": v["output"], "price": round(v["price"], 6)}
+                              for m, v in models.items()}
+                try:
+                    from src import ai_usage as _au
+                    _au.record(models_out)
+                    win = _au.windows(models_out)
+                except Exception:
+                    win = {}
                 secs["ai_usage"] = {
                     "ok": True,
                     "scope": "current_month",
                     "period": res.get("period"),
                     "currency": (res.get("totalPrice") or {}).get("currencyCode"),
                     "total_price": round((ai or {}).get("totalPrice", 0.0) or 0.0, 6),
-                    "models": {m: {"input": v["input"], "output": v["output"], "price": round(v["price"], 6)}
-                               for m, v in models.items()},
-                    "note": "per-model current-month (OVH); windows 8h/24h/3d/7d/1m + per-agent need snapshot deltas + router attribution",
+                    "models": models_out,
+                    "windows": win,  # token deltas over 8h/24h/3d/7d/1m from snapshots
+                    "note": "per-model current-month (OVH); windows accrue from snapshots; per-agent needs router attribution",
                 }
         except Exception as e:
             secs["ai_usage"] = {"ok": False, "error": str(e)}
@@ -315,7 +323,7 @@ async function load(){
     if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status+' · '+((t.ingress||[]).length)+' routes')).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
     if(s.r2_backup){let r=s.r2_backup;let b=r.error?('<div class="err">'+r.error+'</div>'):(row('newest',r.age_hours!=null?(r.age_hours+'h ago'):'—')+row('objects',r.object_count)+row('size',(r.total_bytes/1048576).toFixed(1)+' MB')+(r.stale?'<div class="err">STALE (&gt;30h)</div>':''));h+=card('R2 backup '+pill(r.ok),b);}
     if(s.ovh_host){let o=s.ovh_host;let b=o.error?('<div class="err">'+o.error+'</div>'):(row('state',o.state)+row('offer',o.offer)+row('cpu/mem',o.vcore+' vCore / '+(o.memory_mb/1024)+' GB')+row('disk',o.disk_gb+' GB')+row('zone',o.zone));h+=card('OVH host '+pill(o.ok),b);}
-    if(s.ai_usage){let a=s.ai_usage;let b=a.error?('<div class="err">'+a.error+'</div>'):(Object.entries(a.models||{}).map(([m,v])=>row(m,v.input+' in / '+v.output+' out')).join('')+row('cost ('+(a.scope||'')+')',a.total_price+' '+(a.currency||'')));h+=card('AI Endpoints '+pill(a.ok),b);}
+    if(s.ai_usage){let a=s.ai_usage;let w=a.windows||{};let wr=['24h','7d'].map(k=>{let x=w[k];return (x&&x.input!=null)?row(k+' Δ',x.input+' in / '+x.output+' out'):'';}).join('');let b=a.error?('<div class="err">'+a.error+'</div>'):(Object.entries(a.models||{}).map(([m,v])=>row(m,v.input+' in / '+v.output+' out')).join('')+row('cost ('+(a.scope||'')+')',a.total_price+' '+(a.currency||''))+wr);h+=card('AI Endpoints '+pill(a.ok),b);}
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
