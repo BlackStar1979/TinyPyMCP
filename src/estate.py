@@ -40,6 +40,7 @@ async def collect_estate(
     include_cloudflare: bool = True,
     include_r2: bool = True,
     include_ovh: bool = True,
+    include_ai_usage: bool = True,
 ) -> dict[str, Any]:
     """Aggregate the estate snapshot. `mcp` is the FastMCP instance (for the live
     tool count). All sub-aggregations are fault-isolated."""
@@ -150,6 +151,49 @@ async def collect_estate(
                 }
         except Exception as e:
             secs["ovh_host"] = {"ok": False, "error": str(e)}
+
+    if include_ai_usage:
+        try:
+            import os
+            from src import ovh_client as _ovh
+            pid = os.environ.get("MCP_OVH_PROJECT_ID", "d338f977a137470cb2cd46bf9e875a3d")
+
+            def _fetch_ai():
+                cfg = _ovh._config("/secrets/ovh-estate.json")
+                return _ovh._request(cfg, "GET", f"/cloud/project/{pid}/usage/current")
+
+            u = _cached("ai_usage", 300, _fetch_ai)
+            if u.get("ok") is False:
+                secs["ai_usage"] = {"ok": False, "error": u.get("error") or u.get("message")}
+            else:
+                res = u.get("result") or {}
+                ru = res.get("resourcesUsage") or []
+                ai = next((x for x in ru if x.get("type") == "ai-endpoints"), None)
+                models: dict[str, dict[str, Any]] = {}
+                if ai:
+                    for r_ in ai.get("resources", []):
+                        for c in r_.get("components", []):
+                            name = c.get("name", "")
+                            qty = (c.get("quantity") or {}).get("value", 0) or 0
+                            price = c.get("totalPrice", 0.0) or 0.0
+                            for suffix, key in (("-input_tokens", "input"), ("-output_tokens", "output")):
+                                if name.endswith(suffix):
+                                    m = models.setdefault(name[: -len(suffix)], {"input": 0, "output": 0, "price": 0.0})
+                                    m[key] += qty
+                                    m["price"] += price
+                                    break
+                secs["ai_usage"] = {
+                    "ok": True,
+                    "scope": "current_month",
+                    "period": res.get("period"),
+                    "currency": (res.get("totalPrice") or {}).get("currencyCode"),
+                    "total_price": round((ai or {}).get("totalPrice", 0.0) or 0.0, 6),
+                    "models": {m: {"input": v["input"], "output": v["output"], "price": round(v["price"], 6)}
+                               for m, v in models.items()},
+                    "note": "per-model current-month (OVH); windows 8h/24h/3d/7d/1m + per-agent need snapshot deltas + router attribution",
+                }
+        except Exception as e:
+            secs["ai_usage"] = {"ok": False, "error": str(e)}
 
     snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
     return snap
@@ -271,6 +315,7 @@ async function load(){
     if(s.cloudflare){let b=s.cloudflare.error?('<div class="err">'+s.cloudflare.error+'</div>'):(row('DNS records',s.cloudflare.dns_count)+(s.cloudflare.tunnels||[]).map(t=>row('tunnel '+t.name,t.status+' · '+((t.ingress||[]).length)+' routes')).join(''));h+=card('Cloudflare '+pill(s.cloudflare.ok),b);}
     if(s.r2_backup){let r=s.r2_backup;let b=r.error?('<div class="err">'+r.error+'</div>'):(row('newest',r.age_hours!=null?(r.age_hours+'h ago'):'—')+row('objects',r.object_count)+row('size',(r.total_bytes/1048576).toFixed(1)+' MB')+(r.stale?'<div class="err">STALE (&gt;30h)</div>':''));h+=card('R2 backup '+pill(r.ok),b);}
     if(s.ovh_host){let o=s.ovh_host;let b=o.error?('<div class="err">'+o.error+'</div>'):(row('state',o.state)+row('offer',o.offer)+row('cpu/mem',o.vcore+' vCore / '+(o.memory_mb/1024)+' GB')+row('disk',o.disk_gb+' GB')+row('zone',o.zone));h+=card('OVH host '+pill(o.ok),b);}
+    if(s.ai_usage){let a=s.ai_usage;let b=a.error?('<div class="err">'+a.error+'</div>'):(Object.entries(a.models||{}).map(([m,v])=>row(m,v.input+' in / '+v.output+' out')).join('')+row('cost ('+(a.scope||'')+')',a.total_price+' '+(a.currency||'')));h+=card('AI Endpoints '+pill(a.ok),b);}
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
