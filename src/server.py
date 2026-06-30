@@ -61,10 +61,6 @@ from src.net.fetch import (
     http_probe as http_probe_op,
 )
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
-from src.code.audit import audit as code_audit_op
-from src.code.architecture import architecture as get_architecture_op
-from src.code.changes import detect_changes as detect_changes_op
-from src.code.skeleton import skeleton as code_skeleton_op
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
 from src.vps.channel import call as vps_call_op, call_async as vps_call_async
@@ -1413,77 +1409,6 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """Run a docker CLI command on the VPS host (mounted docker.sock). Reads ungated; mutations confirm-guarded + audited."""
         return dctl.docker(args, confirm=confirm)
 
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Code audit (dead code / unused imports / size)",
-            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
-        )
-    )
-    def code_audit(
-        path: Annotated[str, Field(description="Absolute directory to audit (inside C:\\Work).")],
-        recursive: Annotated[bool, Field(description="Recurse into subdirectories.")] = True,
-        max_files: Annotated[int, Field(description="Cap on files scanned.", ge=1, le=5000)] = 1000,
-        top_n: Annotated[int, Field(description="How many largest modules to list.", ge=1, le=100)] = 20,
-    ) -> dict[str, Any]:
-        """Static audit (no execution) for cleanup + resource footprint: dead-module
-        CANDIDATES (zero static fan-in, excluding entry/test/package files), unused
-        imports per file (AST), and the largest modules by LOC. Candidates only —
-        dynamic imports / decorator-registry / reflection cause false positives."""
-        return code_audit_op(path, recursive, max_files, top_n)
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Get architecture",
-            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
-        )
-    )
-    def get_architecture(
-        path: Annotated[str, Field(description="Absolute directory to map (inside C:\\Work).")],
-        recursive: Annotated[bool, Field(description="Recurse into subdirectories.")] = True,
-        max_files: Annotated[int, Field(description="Cap on files scanned.", ge=1, le=5000)] = 1000,
-        top_n: Annotated[int, Field(description="How many hot files / externals to list.", ge=1, le=50)] = 12,
-    ) -> dict[str, Any]:
-        """Compact architecture digest (no execution): per-package module/LOC/symbol
-        counts, the PACKAGE-level dependency graph (layering), entry points, hot
-        files (fan-in/out) and top externals. Use to understand a repo's shape
-        before porting/editing — far fewer tokens than the raw file graph."""
-        return get_architecture_op(path, recursive, max_files, top_n)
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Detect changes (git, structural)",
-            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
-        )
-    )
-    def detect_changes(
-        path: Annotated[str, Field(description="Absolute git work-tree (inside C:\\Work).")],
-        base: Annotated[str, Field(description="Base revision/ref.")] = "HEAD~1",
-        head: Annotated[str, Field(description="Head revision/ref.")] = "HEAD",
-        max_files: Annotated[int, Field(description="Cap on changed files inspected.", ge=1, le=2000)] = 200,
-    ) -> dict[str, Any]:
-        """Structural diff between two git revisions: changed files (A/M/D) plus,
-        per changed Python file, the function/class symbols added/removed (AST).
-        Read-only, git only — shows the real surface of a change, not raw lines."""
-        return detect_changes_op(path, base, head, max_files)
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Code skeleton (structural memory)",
-            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
-        )
-    )
-    def code_skeleton(
-        path: Annotated[str, Field(description="Absolute directory (inside C:\\Work).")],
-        recursive: Annotated[bool, Field(description="Recurse into subdirectories.")] = True,
-        max_files: Annotated[int, Field(description="Cap on Python files.", ge=1, le=5000)] = 500,
-        max_chars: Annotated[int, Field(description="Cap on the skeleton text.", ge=1000, le=200_000)] = 120_000,
-    ) -> dict[str, Any]:
-        """Compact Python skeleton (no execution): per-file top-level defs/classes
-        with signatures + first docstring line + methods, plus a reduction ratio vs
-        raw source. Structural memory — feed this tiny digest to understand a repo
-        instead of reading full source (big token savings)."""
-        return code_skeleton_op(path, recursive, max_files, max_chars)
-
     # --- SIM/compute job governance, stage 1 (read-only / dry-run; MCP as typed
     # governance interface, never the compute engine — see compute-plane ADR). ---
     from src.sim import manifest as simmf
@@ -1719,12 +1644,15 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             if name not in active:
                 tm.remove_tool(name)
 
-    # ── Dynamic toolsets / hotplug (operator D9) ────────────────────────────
-    # Register the toolset meta-tools, snapshot the full (profile-filtered)
-    # surface, then expose only CORE — the agent rotates groups in/out at runtime
-    # and we emit notifications/tools/list-changed (within the call's own stream,
-    # so it works even on stateless_http). Disabled with MCP_HOTPLUG=0.
-    if os.environ.get("MCP_HOTPLUG", "1").strip().lower() not in ("0", "false", "no", "off"):
+    # ── Dynamic toolsets / hotplug — OPT-IN, default OFF ────────────────────
+    # Reverted to off-by-default: this harness already DEFERS tool schemas
+    # (ToolSearch progressive disclosure), so the per-thread token cost is the
+    # tool NAME list, not full schemas — pruning the server surface saved little
+    # while runtime rotation fought the harness (it re-indexes at session start,
+    # not on mid-session list-changed, which locked the agent out of enabled
+    # groups). Kept as an optional scoping/security lever: MCP_HOTPLUG=1 to enable
+    # the CORE-only surface + list_toolsets/enable_toolset/disable_toolset.
+    if os.environ.get("MCP_HOTPLUG", "0").strip().lower() not in ("0", "false", "no", "off"):
         from src import toolsets as _ts
         _tm = mcp._tool_manager
 

@@ -31,7 +31,7 @@ CORE = {
 # Enable-on-demand groups.
 GROUPS = {
     "code": {"build_index", "index_status", "search_index", "code_dependencies", "code_impact",
-             "code_symbols", "code_audit", "code_skeleton", "detect_changes", "get_architecture"},
+             "code_symbols"},
     "net": {"http_probe", "check_npm_package", "check_pypi_package", "check_cve",
             "check_github_advisory", "fetch_docs", "download_docs"},
     "estate": {"estate_status"},
