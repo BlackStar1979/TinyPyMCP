@@ -557,6 +557,39 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
     @mcp.tool(
         annotations=ToolAnnotations(
+            title="Memory: save ADR",
+            readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def memory_save_adr(
+        title: Annotated[str, Field(description="Short decision title.", min_length=3, max_length=200)],
+        decision: Annotated[str, Field(description="The decision made (what + why, imperative).", min_length=3)],
+        context: Annotated[str, Field(description="Background/forces driving the decision.")] = "",
+        consequences: Annotated[str, Field(description="Resulting trade-offs / follow-ups.")] = "",
+        alternatives: Annotated[str, Field(description="Options considered and rejected.")] = "",
+        status: Annotated[str, Field(description="proposed | accepted | superseded | rejected.")] = "accepted",
+        agent_name: Annotated[str, Field(description="Who recorded it. Omit for shared.", max_length=64)] = "",
+    ) -> dict[str, Any]:
+        """Record an Architecture Decision Record as a structured, semantically
+        searchable memory (type='adr'). Surfaces in memory_search and memory_list_adrs.
+        Keeps architectural decisions first-class instead of buried in prose."""
+        return mem.save_adr(title, decision, context, consequences, alternatives, status, agent_name)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Memory: list ADRs",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def memory_list_adrs(
+        agent_name: Annotated[str, Field(description="Restrict to one agent's ADRs. Omit for all.", max_length=64)] = "",
+        limit: Annotated[int, Field(description="Max ADRs (newest first).", ge=1, le=500)] = 50,
+    ) -> dict[str, Any]:
+        """List recorded ADRs (title + status + date, newest first)."""
+        return mem.list_adrs(agent_name, limit)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
             title="Memory: search",
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
         )

@@ -324,6 +324,61 @@ def reindex_embeddings(agent_name: str = "", limit: int = 1000) -> dict[str, Any
     return {"ok": True, "indexed": indexed, "failed": failed, "candidates": len(rows)}
 
 
+# ── ADR-as-memory (architectural decisions as first-class, searchable memory) ─
+
+def save_adr(
+    title: str,
+    decision: str,
+    context: str = "",
+    consequences: str = "",
+    alternatives: str = "",
+    status: str = "accepted",
+    agent_name: str = "",
+) -> dict[str, Any]:
+    """Persist an Architecture Decision Record as a structured memory (type='adr').
+    Embedded like any memory, so it surfaces in semantic memory_search and is
+    listable via list_adrs. Keeps decisions first-class (romionology discipline)."""
+    content = (
+        f"# ADR: {title}\n"
+        f"Status: {status}\n"
+        f"Date: {_now()}\n\n"
+        f"## Context\n{context or '(none)'}\n\n"
+        f"## Decision\n{decision}\n\n"
+        f"## Alternatives considered\n{alternatives or '(none)'}\n\n"
+        f"## Consequences\n{consequences or '(none)'}\n"
+    )
+    entry = save_memory(content, agent_name=agent_name, type="adr", category="adr")
+    entry["title"] = title
+    entry["status"] = status
+    return entry
+
+
+def list_adrs(agent_name: str = "", limit: int = 50) -> dict[str, Any]:
+    """List ADRs (newest first), parsing title/status from the structured content."""
+    limit = max(1, min(int(limit), 500))
+    with _connect() as conn:
+        q = "SELECT id, content, created_at FROM memories WHERE type='adr' AND is_archived=0"
+        params: list[Any] = []
+        if agent_name:
+            q += " AND agent_name=?"
+            params.append(agent_name)
+        q += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(q, params).fetchall()
+    out = []
+    for r in rows:
+        c = r["content"] or ""
+        first = c.split("\n", 1)[0]
+        title = first[len("# ADR:"):].strip() if first.startswith("# ADR:") else "(untitled)"
+        status = ""
+        for line in c.split("\n")[:4]:
+            if line.lower().startswith("status:"):
+                status = line.split(":", 1)[1].strip()
+                break
+        out.append({"id": r["id"], "title": title, "status": status, "created_at": r["created_at"]})
+    return {"ok": True, "count": len(out), "adrs": out}
+
+
 # ── Tasks ──────────────────────────────────────────────────────────────────
 
 def create_task(
