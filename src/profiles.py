@@ -30,6 +30,9 @@ READ_ONLY = {
     "vps_fs_list", "vps_fs_stat", "vps_fs_read",
     "sim_validate_job_manifest", "sim_submit_job_dry_run", "sim_experiment_catalog",
     "check_cve", "check_github_advisory",
+    # estate dashboard + read-side of newer tooling (were registered but stale-pruned)
+    "estate_status", "fetch_docs", "memory_list_adrs",
+    "sim_job_status", "sim_list_jobs", "sim_list_artifacts", "sim_fetch_artifact_summary",
 }
 
 OPERATOR_ADMIN = {
@@ -38,6 +41,8 @@ OPERATOR_ADMIN = {
     "build_index", "run_command", "clone_repo",
     "memory_set_state", "memory_save", "memory_create_task", "memory_reindex",
     "vps_request", "vps_docker",
+    # write-side of newer tooling (were registered but stale-pruned)
+    "download_docs", "memory_save_adr", "sim_submit_job", "sim_register_artifact",
 }
 
 CLOUD_ADMIN = {
