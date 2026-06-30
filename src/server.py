@@ -62,6 +62,7 @@ from src.net.fetch import (
 )
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
 from src.code.audit import audit as code_audit_op
+from src.code.architecture import architecture as get_architecture_op
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
 from src.vps.channel import call as vps_call_op, call_async as vps_call_async
@@ -1394,6 +1395,24 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         imports per file (AST), and the largest modules by LOC. Candidates only —
         dynamic imports / decorator-registry / reflection cause false positives."""
         return code_audit_op(path, recursive, max_files, top_n)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Get architecture",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def get_architecture(
+        path: Annotated[str, Field(description="Absolute directory to map (inside C:\\Work).")],
+        recursive: Annotated[bool, Field(description="Recurse into subdirectories.")] = True,
+        max_files: Annotated[int, Field(description="Cap on files scanned.", ge=1, le=5000)] = 1000,
+        top_n: Annotated[int, Field(description="How many hot files / externals to list.", ge=1, le=50)] = 12,
+    ) -> dict[str, Any]:
+        """Compact architecture digest (no execution): per-package module/LOC/symbol
+        counts, the PACKAGE-level dependency graph (layering), entry points, hot
+        files (fan-in/out) and top externals. Use to understand a repo's shape
+        before porting/editing — far fewer tokens than the raw file graph."""
+        return get_architecture_op(path, recursive, max_files, top_n)
 
     # --- SIM/compute job governance, stage 1 (read-only / dry-run; MCP as typed
     # governance interface, never the compute engine — see compute-plane ADR). ---

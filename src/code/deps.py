@@ -55,29 +55,36 @@ def _iter_files(root: Path, recursive: bool, max_files: int) -> list[Path]:
     return out
 
 
-def _raw_imports(path: Path) -> list[str]:
+def _raw_imports(path: Path) -> list[tuple[str, bool]]:
+    """Return (spec, probe_only). probe_only specs are `from pkg import NAME`
+    expansions tried as pkg.NAME submodules — if they don't resolve to a LOCAL
+    file they are dropped (NOT counted as externals/unresolved); the bare package
+    spec already accounts for the external dependency."""
     try:
         text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return []
-    specs: list[str] = []
+    specs: list[tuple[str, bool]] = []
     if path.suffix.lower() in _PY_EXT:
         for m in _RE_PY_IMPORT.finditer(text):
             for part in m.group(1).split(","):
-                specs.append(part.strip().split(" as ")[0].strip())
+                s = part.strip().split(" as ")[0].strip()
+                if s:
+                    specs.append((s, False))
         for m in _RE_PY_FROM_FULL.finditer(text):
             mod = m.group(1).strip()
-            specs.append(mod)  # the package itself (e.g. resolves to __init__.py)
+            if mod:
+                specs.append((mod, False))  # the package itself (-> __init__.py / external)
             names = m.group(2).split("#")[0].strip().strip("()")
             for nm in names.split(","):
                 nm = nm.strip().split(" as ")[0].strip()
                 if nm and nm != "*" and _RE_NAME.match(nm):
                     sep = "" if mod.endswith(".") else "."
-                    specs.append(f"{mod}{sep}{nm}")  # try pkg.submodule -> file
+                    specs.append((f"{mod}{sep}{nm}", True))  # pkg.submodule probe (local-only)
     else:
         for rx in (_RE_JS_FROM, _RE_JS_REQUIRE, _RE_JS_IMPORT_CALL, _RE_JS_BARE_IMPORT):
-            specs += [m.group(1) for m in rx.finditer(text)]
-    return [s for s in specs if s]
+            specs += [(m.group(1), False) for m in rx.finditer(text) if m.group(1)]
+    return specs
 
 
 def _resolve_js(spec: str, src: Path, fileset: set[Path]) -> Path | None:
@@ -136,7 +143,7 @@ def build_dependency_graph(
 
     for f in files:
         fr = f.resolve()
-        for spec in _raw_imports(f):
+        for spec, probe in _raw_imports(f):
             if f.suffix.lower() in _PY_EXT:
                 target = _resolve_py(spec, fr, root, fileset)
                 is_local_looking = spec.startswith(".") or (root / spec.replace(".", "/")).with_suffix(".py").exists()
@@ -145,6 +152,8 @@ def build_dependency_graph(
                 is_local_looking = spec.startswith(".")
             if target is not None:
                 edges.append((rel(fr), rel(target)))
+            elif probe:
+                continue  # submodule probe that isn't a local file -> drop (no external/unresolved noise)
             elif is_local_looking:
                 unresolved.append({"file": rel(fr), "import": spec})
             else:
