@@ -53,7 +53,13 @@ from src.exec.runner import (
     clone_repo_async as clone_repo_op,
     run_command_async as run_command_op,
 )
-from src.net.fetch import check_npm_package as check_npm_op, check_pypi_package as check_pypi_op, http_probe as http_probe_op
+from src.net.fetch import (
+    check_npm_package as check_npm_op,
+    check_pypi_package as check_pypi_op,
+    download_docs as download_docs_op,
+    fetch_docs as fetch_docs_op,
+    http_probe as http_probe_op,
+)
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
@@ -666,6 +672,39 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         capped body. Use to test endpoints (e.g. verify a deployed service) or
         fetch a page. Follows redirects."""
         return http_probe_op(url, method, headers, body, timeout)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Fetch docs",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    def fetch_docs(
+        url: Annotated[str, Field(description="Documentation URL (http/https). HTML is stripped to readable text.", min_length=4)],
+        max_chars: Annotated[int, Field(description="Cap on returned text length.", ge=500, le=200_000)] = 200_000,
+        timeout: Annotated[int, Field(description="Seconds before the request times out.", ge=1, le=120)] = 20,
+    ) -> dict[str, Any]:
+        """Fetch a docs/reference URL and return readable text (HTML→text, capped).
+        SSRF-guarded (public IPs only, per redirect hop) like http_probe. Use to
+        pull library/API/SDK documentation without leaving the server."""
+        return fetch_docs_op(url, timeout, max_chars)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Download docs to cache",
+            readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    def download_docs(
+        url: Annotated[str, Field(description="Documentation URL (http/https).", min_length=4)],
+        name: Annotated["str | None", Field(description="Optional filename for the cache (sanitized). Defaults to host+path.")] = None,
+        max_chars: Annotated[int, Field(description="Cap on saved text length.", ge=500, le=200_000)] = 200_000,
+        timeout: Annotated[int, Field(description="Seconds before the request times out.", ge=1, le=120)] = 20,
+    ) -> dict[str, Any]:
+        """fetch_docs + persist the readable text to the docs cache (under the
+        confined workspace), so it's later readable via the file tools (read_file,
+        search_codebase). Returns the saved path."""
+        return download_docs_op(url, name, timeout, max_chars)
 
     @mcp.tool(
         annotations=ToolAnnotations(

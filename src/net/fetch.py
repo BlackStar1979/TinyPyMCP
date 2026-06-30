@@ -9,6 +9,7 @@ policy; bounded only by timeout and body-size caps.
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -110,6 +111,113 @@ def http_probe(
                 "body_truncated": truncated,
             }
     raise ValueError(f"too many redirects (>{MAX_REDIRECTS})")
+
+
+import re as _re
+from html.parser import HTMLParser as _HTMLParser
+from pathlib import Path as _Path
+
+from src.utils.path_guard import ALLOWED_ROOT as _ALLOWED_ROOT, ensure_within as _ensure_within
+
+_DOCS_CACHE = _Path(os.environ["MCP_DOCS_CACHE"]) if os.environ.get("MCP_DOCS_CACHE") else (_ALLOWED_ROOT / "_docs_cache")
+
+
+class _DocText(_HTMLParser):
+    """Lightweight HTML -> readable text (drops script/style/head; captures <title>)."""
+    _SKIP = {"script", "style", "noscript", "svg", "head", "nav", "footer"}
+    _BREAK = {"p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "section", "article"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip = 0
+        self._in_title = False
+        self.title: str | None = None
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in self._SKIP:
+            self._skip += 1
+        if tag == "title":
+            self._in_title = True
+        if tag in self._BREAK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP and self._skip:
+            self._skip -= 1
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._skip:
+            return
+        if self._in_title and self.title is None and data.strip():
+            self.title = data.strip()
+        if data.strip():
+            self.parts.append(data)
+
+    def text(self) -> str:
+        t = "".join(self.parts)
+        t = _re.sub(r"[ \t]+", " ", t)
+        t = _re.sub(r"\n\s*\n\s*\n+", "\n\n", t)
+        return t.strip()
+
+
+def _fetch_get(url: str, timeout: int) -> httpx.Response:
+    """GET with the same per-hop SSRF guard as http_probe."""
+    current = url
+    with httpx.Client(timeout=timeout, follow_redirects=False) as c:
+        for _ in range(MAX_REDIRECTS + 1):
+            _guard_public_url(current)
+            r = c.get(current, headers={"User-Agent": "TinyPyMCP-fetch_docs"})
+            if r.is_redirect and r.headers.get("location"):
+                current = str(httpx.URL(current).join(r.headers["location"]))
+                continue
+            return r
+    raise ValueError(f"too many redirects (>{MAX_REDIRECTS})")
+
+
+def fetch_docs(url: str, timeout: int = DEFAULT_TIMEOUT, max_chars: int = MAX_BODY_CHARS) -> dict[str, Any]:
+    """Fetch a documentation URL and return readable text (HTML stripped to plain
+    text, capped). SSRF-guarded like http_probe (public IPs only, per redirect)."""
+    timeout = max(1, min(int(timeout), MAX_TIMEOUT))
+    max_chars = max(0, min(int(max_chars), MAX_BODY_CHARS))
+    r = _fetch_get(url, timeout)
+    ct = r.headers.get("content-type", "")
+    raw = r.text
+    title = None
+    if "html" in ct.lower() or raw.lstrip()[:1] == "<":
+        ex = _DocText()
+        try:
+            ex.feed(raw)
+        except Exception:
+            pass
+        title, text = ex.title, ex.text()
+    else:
+        text = raw
+    truncated = len(text) > max_chars
+    return {
+        "url": str(r.url), "status": r.status_code, "ok": r.is_success,
+        "content_type": ct, "title": title,
+        "text": text[:max_chars], "chars": min(len(text), max_chars), "truncated": truncated,
+    }
+
+
+def download_docs(url: str, name: str | None = None, timeout: int = DEFAULT_TIMEOUT,
+                  max_chars: int = MAX_BODY_CHARS) -> dict[str, Any]:
+    """fetch_docs + persist the readable text to the docs cache (under the
+    confined workspace), so it's later readable via the file tools."""
+    d = fetch_docs(url, timeout, max_chars)
+    base = name or (urlsplit(url).netloc + "_" + urlsplit(url).path).strip("/_")
+    base = _re.sub(r"[^A-Za-z0-9._-]", "_", base)[:80] or "doc"
+    if not base.endswith((".md", ".txt")):
+        base += ".md"
+    _DOCS_CACHE.mkdir(parents=True, exist_ok=True)
+    dest = _ensure_within(str(_DOCS_CACHE / base))
+    header = f"# Fetched: {d['url']}\n# title: {d.get('title') or ''}\n\n"
+    dest.write_text(header + d["text"], encoding="utf-8")
+    return {"saved": str(dest), "url": d["url"], "title": d.get("title"),
+            "chars": d["chars"], "truncated": d["truncated"]}
 
 
 def check_npm_package(name: str) -> dict[str, Any]:
