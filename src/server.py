@@ -1719,6 +1719,87 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             if name not in active:
                 tm.remove_tool(name)
 
+    # ── Dynamic toolsets / hotplug (operator D9) ────────────────────────────
+    # Register the toolset meta-tools, snapshot the full (profile-filtered)
+    # surface, then expose only CORE — the agent rotates groups in/out at runtime
+    # and we emit notifications/tools/list-changed (within the call's own stream,
+    # so it works even on stateless_http). Disabled with MCP_HOTPLUG=0.
+    if os.environ.get("MCP_HOTPLUG", "1").strip().lower() not in ("0", "false", "no", "off"):
+        from src import toolsets as _ts
+        _tm = mcp._tool_manager
+
+        def _active() -> set[str]:
+            return set(_tm._tools.keys())
+
+        def _session(ctx):
+            s = getattr(ctx, "session", None)
+            if s is None:
+                rc = getattr(ctx, "request_context", None)
+                s = getattr(rc, "session", None) if rc else None
+            return s
+
+        @mcp.tool(annotations=ToolAnnotations(title="Toolsets: list", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+        def list_toolsets() -> dict[str, Any]:
+            """List dynamic toolset groups (which are active) + the always-on core.
+            The server exposes only CORE by default; call enable_toolset(name) to add
+            a group's tools at runtime (a tools/list-changed refresh is emitted)."""
+            act = _active()
+            groups: dict[str, Any] = {}
+            for g, names in _ts.GROUPS.items():
+                present = [n for n in names if n in _ALL]
+                groups[g] = {"active": bool(present) and all(n in act for n in present),
+                             "tools": sorted(present)}
+            return {"core_active": sorted(n for n in _ts.CORE if n in act),
+                    "groups": groups, "active_tool_count": len(act), "total_available": len(_ALL)}
+
+        @mcp.tool(annotations=ToolAnnotations(title="Toolsets: enable", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+        async def enable_toolset(
+            name: Annotated[str, Field(description=f"Group to enable: {', '.join(_ts.GROUP_NAMES)}.")],
+            ctx: Context,
+        ) -> dict[str, Any]:
+            """Add a toolset group's tools to the live surface and notify the client."""
+            if name not in _ts.GROUPS:
+                return {"ok": False, "error": f"unknown toolset: {name} (valid: {', '.join(_ts.GROUP_NAMES)})"}
+            added = []
+            for n in _ts.GROUPS[name]:
+                if n in _ALL and n not in _tm._tools:
+                    _tm._tools[n] = _ALL[n]
+                    added.append(n)
+            s = _session(ctx)
+            if s is not None:
+                try:
+                    await s.send_tool_list_changed()
+                except Exception:
+                    pass
+            return {"ok": True, "toolset": name, "added": sorted(added), "active_tool_count": len(_active())}
+
+        @mcp.tool(annotations=ToolAnnotations(title="Toolsets: disable", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+        async def disable_toolset(
+            name: Annotated[str, Field(description=f"Group to disable: {', '.join(_ts.GROUP_NAMES)}.")],
+            ctx: Context,
+        ) -> dict[str, Any]:
+            """Remove a toolset group's tools from the live surface (core is never removed)."""
+            if name not in _ts.GROUPS:
+                return {"ok": False, "error": f"unknown toolset: {name}"}
+            removed = []
+            for n in _ts.GROUPS[name]:
+                if n not in _ts.CORE and n in _tm._tools:
+                    del _tm._tools[n]
+                    removed.append(n)
+            s = _session(ctx)
+            if s is not None:
+                try:
+                    await s.send_tool_list_changed()
+                except Exception:
+                    pass
+            return {"ok": True, "toolset": name, "removed": sorted(removed), "active_tool_count": len(_active())}
+
+        # Snapshot the full surface (now incl. the meta-tools), then prune to CORE.
+        _ALL = dict(_tm._tools)
+        for _n in list(_tm._tools.keys()):
+            if _n not in _ts.CORE:
+                del _tm._tools[_n]
+
     return mcp
 
 
