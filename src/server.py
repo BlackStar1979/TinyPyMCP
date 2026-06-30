@@ -63,6 +63,7 @@ from src.net.fetch import (
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
 from src.code.audit import audit as code_audit_op
 from src.code.architecture import architecture as get_architecture_op
+from src.code.changes import detect_changes as detect_changes_op
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
 from src.vps.channel import call as vps_call_op, call_async as vps_call_async
@@ -1413,6 +1414,23 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         files (fan-in/out) and top externals. Use to understand a repo's shape
         before porting/editing — far fewer tokens than the raw file graph."""
         return get_architecture_op(path, recursive, max_files, top_n)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Detect changes (git, structural)",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def detect_changes(
+        path: Annotated[str, Field(description="Absolute git work-tree (inside C:\\Work).")],
+        base: Annotated[str, Field(description="Base revision/ref.")] = "HEAD~1",
+        head: Annotated[str, Field(description="Head revision/ref.")] = "HEAD",
+        max_files: Annotated[int, Field(description="Cap on changed files inspected.", ge=1, le=2000)] = 200,
+    ) -> dict[str, Any]:
+        """Structural diff between two git revisions: changed files (A/M/D) plus,
+        per changed Python file, the function/class symbols added/removed (AST).
+        Read-only, git only — shows the real surface of a change, not raw lines."""
+        return detect_changes_op(path, base, head, max_files)
 
     # --- SIM/compute job governance, stage 1 (read-only / dry-run; MCP as typed
     # governance interface, never the compute engine — see compute-plane ADR). ---
