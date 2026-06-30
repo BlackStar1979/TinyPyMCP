@@ -64,6 +64,7 @@ from src.code.deps import analyze_impact, build_dependency_graph, summarize_grap
 from src.code.audit import audit as code_audit_op
 from src.code.architecture import architecture as get_architecture_op
 from src.code.changes import detect_changes as detect_changes_op
+from src.code.skeleton import skeleton as code_skeleton_op
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
 from src.vps.channel import call as vps_call_op, call_async as vps_call_async
@@ -1464,6 +1465,24 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         per changed Python file, the function/class symbols added/removed (AST).
         Read-only, git only — shows the real surface of a change, not raw lines."""
         return detect_changes_op(path, base, head, max_files)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Code skeleton (structural memory)",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def code_skeleton(
+        path: Annotated[str, Field(description="Absolute directory (inside C:\\Work).")],
+        recursive: Annotated[bool, Field(description="Recurse into subdirectories.")] = True,
+        max_files: Annotated[int, Field(description="Cap on Python files.", ge=1, le=5000)] = 500,
+        max_chars: Annotated[int, Field(description="Cap on the skeleton text.", ge=1000, le=200_000)] = 120_000,
+    ) -> dict[str, Any]:
+        """Compact Python skeleton (no execution): per-file top-level defs/classes
+        with signatures + first docstring line + methods, plus a reduction ratio vs
+        raw source. Structural memory — feed this tiny digest to understand a repo
+        instead of reading full source (big token savings)."""
+        return code_skeleton_op(path, recursive, max_files, max_chars)
 
     # --- SIM/compute job governance, stage 1 (read-only / dry-run; MCP as typed
     # governance interface, never the compute engine — see compute-plane ADR). ---
