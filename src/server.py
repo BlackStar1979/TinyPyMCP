@@ -1732,11 +1732,14 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
             return set(_tm._tools.keys())
 
         def _session(ctx):
-            s = getattr(ctx, "session", None)
-            if s is None:
-                rc = getattr(ctx, "request_context", None)
-                s = getattr(rc, "session", None) if rc else None
-            return s
+            # ctx.session is a property that RAISES outside a request; be safe.
+            try:
+                return ctx.session
+            except Exception:
+                try:
+                    return ctx.request_context.session
+                except Exception:
+                    return None
 
         @mcp.tool(annotations=ToolAnnotations(title="Toolsets: list", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
         def list_toolsets() -> dict[str, Any]:
