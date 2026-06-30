@@ -61,6 +61,7 @@ from src.net.fetch import (
     http_probe as http_probe_op,
 )
 from src.code.deps import analyze_impact, build_dependency_graph, summarize_graph
+from src.code.audit import audit as code_audit_op
 from src.code.search_index import build_index as build_index_op, index_status as index_status_op, search_index as search_index_op
 from src.code.symbols import extract_symbols as extract_symbols_op
 from src.vps.channel import call as vps_call_op, call_async as vps_call_async
@@ -1375,6 +1376,24 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
     ) -> dict[str, Any]:
         """Run a docker CLI command on the VPS host (mounted docker.sock). Reads ungated; mutations confirm-guarded + audited."""
         return dctl.docker(args, confirm=confirm)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Code audit (dead code / unused imports / size)",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def code_audit(
+        path: Annotated[str, Field(description="Absolute directory to audit (inside C:\\Work).")],
+        recursive: Annotated[bool, Field(description="Recurse into subdirectories.")] = True,
+        max_files: Annotated[int, Field(description="Cap on files scanned.", ge=1, le=5000)] = 1000,
+        top_n: Annotated[int, Field(description="How many largest modules to list.", ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        """Static audit (no execution) for cleanup + resource footprint: dead-module
+        CANDIDATES (zero static fan-in, excluding entry/test/package files), unused
+        imports per file (AST), and the largest modules by LOC. Candidates only —
+        dynamic imports / decorator-registry / reflection cause false positives."""
+        return code_audit_op(path, recursive, max_files, top_n)
 
     # --- SIM/compute job governance, stage 1 (read-only / dry-run; MCP as typed
     # governance interface, never the compute engine — see compute-plane ADR). ---

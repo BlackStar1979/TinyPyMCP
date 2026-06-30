@@ -7,7 +7,6 @@ from __future__ import annotations
 import difflib
 import re
 import shutil
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypedDict

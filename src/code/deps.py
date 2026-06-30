@@ -29,6 +29,10 @@ _JS_RESOLVE_EXT = [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json"]
 # Python
 _RE_PY_IMPORT = re.compile(r"^\s*import\s+([\w\.]+(?:\s*,\s*[\w\.]+)*)", re.M)
 _RE_PY_FROM = re.compile(r"^\s*from\s+(\.*[\w\.]*)\s+import\s+", re.M)
+# Capture the imported NAMES too, so `from pkg import submodule` produces an edge
+# to pkg/submodule.py (not just pkg/__init__.py). Single-line imports only.
+_RE_PY_FROM_FULL = re.compile(r"^\s*from\s+(\.*[\w\.]*)\s+import\s+(.+)$", re.M)
+_RE_NAME = re.compile(r"^\w+$")
 # JS/TS
 _RE_JS_FROM = re.compile(r"""\bfrom\s+['"]([^'"]+)['"]""")
 _RE_JS_REQUIRE = re.compile(r"""\brequire\(\s*['"]([^'"]+)['"]\s*\)""")
@@ -61,8 +65,15 @@ def _raw_imports(path: Path) -> list[str]:
         for m in _RE_PY_IMPORT.finditer(text):
             for part in m.group(1).split(","):
                 specs.append(part.strip().split(" as ")[0].strip())
-        for m in _RE_PY_FROM.finditer(text):
-            specs.append(m.group(1).strip())
+        for m in _RE_PY_FROM_FULL.finditer(text):
+            mod = m.group(1).strip()
+            specs.append(mod)  # the package itself (e.g. resolves to __init__.py)
+            names = m.group(2).split("#")[0].strip().strip("()")
+            for nm in names.split(","):
+                nm = nm.strip().split(" as ")[0].strip()
+                if nm and nm != "*" and _RE_NAME.match(nm):
+                    sep = "" if mod.endswith(".") else "."
+                    specs.append(f"{mod}{sep}{nm}")  # try pkg.submodule -> file
     else:
         for rx in (_RE_JS_FROM, _RE_JS_REQUIRE, _RE_JS_IMPORT_CALL, _RE_JS_BARE_IMPORT):
             specs += [m.group(1) for m in rx.finditer(text)]

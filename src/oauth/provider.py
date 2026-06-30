@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import secrets
 import time
-from typing import Any
 
 from mcp.server.auth.provider import (
     AccessToken,
