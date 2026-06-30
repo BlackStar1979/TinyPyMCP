@@ -41,6 +41,7 @@ async def collect_estate(
     include_r2: bool = True,
     include_ovh: bool = True,
     include_ai_usage: bool = True,
+    include_edge: bool = True,
 ) -> dict[str, Any]:
     """Aggregate the estate snapshot. `mcp` is the FastMCP instance (for the live
     tool count). All sub-aggregations are fault-isolated."""
@@ -203,6 +204,40 @@ async def collect_estate(
         except Exception as e:
             secs["ai_usage"] = {"ok": False, "error": str(e)}
 
+    if include_edge:
+        # EdgeFastMCP (Cloudflare Worker — the CF-half MCP) self-reports its
+        # deploy state. Undeployed by design today => "scaffold" (NOT an error,
+        # so it doesn't redden the estate). Set MCP_EDGE_URL to its endpoint once
+        # deployed via `wrangler deploy` → it gets auto-probed for liveness.
+        try:
+            import os
+            edge_url = os.environ.get("MCP_EDGE_URL", "").strip()
+            info: dict[str, Any] = {
+                "ok": True,
+                "component": "EdgeFastMCP",
+                "role": "Cloudflare-half MCP (R2 / Analytics / audit / Workers)",
+                "deploy": "wrangler deploy (CF Worker)",
+            }
+            if not edge_url:
+                info["state"] = "scaffold"
+                info["detail"] = "prepared, not deployed — set MCP_EDGE_URL to enable live probe"
+            else:
+                def _probe_edge():
+                    import httpx
+                    try:
+                        r = httpx.get(edge_url, timeout=5.0)
+                        return {"state": "live", "http": r.status_code}  # any HTTP reply = reachable
+                    except Exception as ex:
+                        return {"state": "down", "error": str(ex)}
+                p = _cached("edge", 60, _probe_edge)
+                info.update(p)
+                info["endpoint"] = edge_url
+                if p.get("state") == "down":
+                    info["ok"] = False
+            secs["edgefastmcp"] = info
+        except Exception as e:
+            secs["edgefastmcp"] = {"ok": False, "error": str(e)}
+
     snap["healthy"] = all(sec.get("ok", True) for sec in secs.values())
     return snap
 
@@ -324,6 +359,7 @@ async function load(){
     if(s.r2_backup){let r=s.r2_backup;let b=r.error?('<div class="err">'+r.error+'</div>'):(row('newest',r.age_hours!=null?(r.age_hours+'h ago'):'—')+row('objects',r.object_count)+row('size',(r.total_bytes/1048576).toFixed(1)+' MB')+(r.stale?'<div class="err">STALE (&gt;30h)</div>':''));h+=card('R2 backup '+pill(r.ok),b);}
     if(s.ovh_host){let o=s.ovh_host;let b=o.error?('<div class="err">'+o.error+'</div>'):(row('state',o.state)+row('offer',o.offer)+row('cpu/mem',o.vcore+' vCore / '+(o.memory_mb/1024)+' GB')+row('disk',o.disk_gb+' GB')+row('zone',o.zone));h+=card('OVH host '+pill(o.ok),b);}
     if(s.ai_usage){let a=s.ai_usage;let w=a.windows||{};let wr=['24h','7d'].map(k=>{let x=w[k];return (x&&x.input!=null)?row(k+' Δ',x.input+' in / '+x.output+' out'):'';}).join('');let b=a.error?('<div class="err">'+a.error+'</div>'):(Object.entries(a.models||{}).map(([m,v])=>row(m,v.input+' in / '+v.output+' out')).join('')+row('cost ('+(a.scope||'')+')',a.total_price+' '+(a.currency||''))+wr);h+=card('AI Endpoints '+pill(a.ok),b);}
+    if(s.edgefastmcp){let e=s.edgefastmcp;let b=e.error?('<div class="err">'+e.error+'</div>'):(row('state',e.state||'—')+(e.role?row('role',e.role):'')+(e.endpoint?row('endpoint',e.endpoint):'')+(e.http!=null?row('http',e.http):'')+row('deploy',e.deploy||'')+(e.detail?('<div class="meta">'+e.detail+'</div>'):''));h+=card('Edge MCP '+pill(e.ok),b);}
     document.getElementById('root').innerHTML=h;
   }catch(e){document.getElementById('root').innerHTML='<div class="card err">'+e+'</div>';}
 }
