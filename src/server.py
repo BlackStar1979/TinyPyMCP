@@ -1754,7 +1754,7 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
         @mcp.tool(annotations=ToolAnnotations(title="Toolsets: enable", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False))
         async def enable_toolset(
-            name: Annotated[str, Field(description=f"Group to enable: {', '.join(_ts.GROUP_NAMES)}.")],
+            name: Annotated[str, Field(description="Group to enable: code | net | estate | vps | cf | ovh | kuma | gh | sim.")],
             ctx: Context,
         ) -> dict[str, Any]:
             """Add a toolset group's tools to the live surface and notify the client."""
@@ -1775,7 +1775,7 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
         @mcp.tool(annotations=ToolAnnotations(title="Toolsets: disable", readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=False))
         async def disable_toolset(
-            name: Annotated[str, Field(description=f"Group to disable: {', '.join(_ts.GROUP_NAMES)}.")],
+            name: Annotated[str, Field(description="Group to disable: code | net | estate | vps | cf | ovh | kuma | gh | sim.")],
             ctx: Context,
         ) -> dict[str, Any]:
             """Remove a toolset group's tools from the live surface (core is never removed)."""
