@@ -65,6 +65,19 @@ def _connect() -> sqlite3.Connection:
             ts         TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sim_artifacts (
+            artifact_id     TEXT PRIMARY KEY,
+            job_id          TEXT NOT NULL,
+            kind            TEXT NOT NULL,
+            sha256          TEXT NOT NULL,
+            engine_version  TEXT,
+            bytes           INTEGER,
+            retention_class TEXT NOT NULL DEFAULT 'standard',
+            r2_path         TEXT,
+            created_at      TEXT NOT NULL
+        )
+    """)
     return conn
 
 
@@ -168,6 +181,69 @@ def get(job_id: str) -> dict[str, Any]:
         },
         "events": [dict(e) for e in events],
     }
+
+
+# Artifact metadata index (sim-job-governance-spec §3). The control plane owns the
+# artifact INDEX (metadata only — never payloads); payloads + R2 archive belong to
+# the future compute plane. register_artifact records one index entry.
+ARTIFACT_KINDS = {"event_log", "metrics", "validation_report", "run_manifest",
+                  "snapshot", "plot", "summary", "comparison"}
+RETENTION_CLASSES = {"ephemeral", "standard", "long_term"}
+
+
+def register_artifact(meta: Any) -> dict[str, Any]:
+    """Record one artifact's METADATA in the index (no payload). Requires the
+    referenced job to exist. Validates kind + retention_class."""
+    if not isinstance(meta, dict):
+        return {"ok": False, "errors": ["artifact metadata must be a JSON object"]}
+    errors: list[str] = []
+    for k in ("artifact_id", "job_id", "kind", "sha256"):
+        if not meta.get(k):
+            errors.append(f"missing required field: {k}")
+    kind = meta.get("kind")
+    if kind is not None and kind not in ARTIFACT_KINDS:
+        errors.append(f"kind must be one of {sorted(ARTIFACT_KINDS)}")
+    rc = meta.get("retention_class", "standard")
+    if rc not in RETENTION_CLASSES:
+        errors.append(f"retention_class must be one of {sorted(RETENTION_CLASSES)}")
+    if errors:
+        return {"ok": False, "errors": errors}
+    with _connect() as conn:
+        if not conn.execute("SELECT 1 FROM sim_jobs WHERE job_id=?", (meta["job_id"],)).fetchone():
+            return {"ok": False, "errors": [f"job not found: {meta['job_id']}"]}
+        if conn.execute("SELECT 1 FROM sim_artifacts WHERE artifact_id=?", (meta["artifact_id"],)).fetchone():
+            return {"ok": False, "errors": [f"artifact_id already exists: {meta['artifact_id']}"]}
+        conn.execute(
+            "INSERT INTO sim_artifacts (artifact_id, job_id, kind, sha256, engine_version,"
+            " bytes, retention_class, r2_path, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (meta["artifact_id"], meta["job_id"], kind, meta["sha256"],
+             meta.get("engine_version"), meta.get("bytes"), rc, meta.get("r2_path"), _now()),
+        )
+        conn.commit()
+    return {"ok": True, "artifact_id": meta["artifact_id"], "job_id": meta["job_id"], "kind": kind}
+
+
+def list_artifacts(job_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """List artifact metadata (no payloads), optionally for one job."""
+    limit = max(1, min(int(limit), 1000))
+    with _connect() as conn:
+        if job_id:
+            rows = conn.execute("SELECT artifact_id, job_id, kind, retention_class, bytes, created_at"
+                                " FROM sim_artifacts WHERE job_id=? ORDER BY created_at DESC LIMIT ?",
+                                (job_id, limit)).fetchall()
+        else:
+            rows = conn.execute("SELECT artifact_id, job_id, kind, retention_class, bytes, created_at"
+                                " FROM sim_artifacts ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return {"ok": True, "count": len(rows), "artifacts": [dict(r) for r in rows]}
+
+
+def get_artifact(artifact_id: str) -> dict[str, Any]:
+    """Bounded metadata for one artifact (never the payload)."""
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM sim_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+    if not row:
+        return {"ok": False, "errors": [f"artifact not found: {artifact_id}"]}
+    return {"ok": True, "artifact": dict(row)}
 
 
 def list_jobs(state: str | None = None, limit: int = 50) -> dict[str, Any]:

@@ -1409,6 +1409,30 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         """List registered jobs (newest first), optionally filtered by state."""
         return simreg.list_jobs(state, limit)
 
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: register artifact (index)", readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=False))
+    def sim_register_artifact(
+        metadata: Annotated[dict, Field(description="Artifact METADATA only (artifact_id, job_id, kind, sha256, [engine_version, bytes, retention_class, r2_path]). NO payload — the control plane owns the index, not the data.")],
+    ) -> dict[str, Any]:
+        """Record one artifact's metadata in the control-plane index (no payload;
+        the referenced job must exist). Payloads + R2 archive belong to the future
+        compute plane (ADR)."""
+        return simreg.register_artifact(metadata)
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: list artifacts", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_list_artifacts(
+        job_id: Annotated["str | None", Field(description="Optional job id to filter artifacts.")] = None,
+        limit: Annotated[int, Field(description="Max artifacts (newest first).", ge=1, le=1000)] = 100,
+    ) -> dict[str, Any]:
+        """List artifact metadata (no payloads), optionally for one job."""
+        return simreg.list_artifacts(job_id, limit)
+
+    @mcp.tool(annotations=ToolAnnotations(title="SIM: artifact summary", readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False))
+    def sim_fetch_artifact_summary(
+        artifact_id: Annotated[str, Field(description="Artifact id to read.")],
+    ) -> dict[str, Any]:
+        """Bounded metadata for one artifact (never the payload)."""
+        return simreg.get_artifact(artifact_id)
+
     # --- Research / security plane (read-only): CVE + GitHub advisory lookup. ---
     from src.net import security as sec
 
