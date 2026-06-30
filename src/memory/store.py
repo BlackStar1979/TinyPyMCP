@@ -34,6 +34,13 @@ _EMBED_ENABLED = os.environ.get("MCP_MEMORY_EMBED", "1").strip().lower() not in 
 _EMBED_MODEL = os.environ.get("MCP_EMBED_MODEL", "bge-m3")
 _EMBED_DIM = int(os.environ.get("MCP_EMBED_DIM", "1024"))
 
+# Semantic dedup-on-write: skip saving a near-duplicate of an existing non-archived
+# memory of the SAME (agent, type) when cosine >= threshold. Keeps the shared store
+# from bloating under concurrent/repeated writes (first hygiene brick for shared
+# context). Nothing is deleted — the original is returned. Needs embeddings+vec.
+_DEDUP_ENABLED = os.environ.get("MCP_MEMORY_DEDUP", "1").strip().lower() not in ("0", "false", "no", "off")
+_DEDUP_THRESHOLD = float(os.environ.get("MCP_MEMORY_DEDUP_THRESHOLD", "0.97"))
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_state (
     agent_name   TEXT PRIMARY KEY,
@@ -190,6 +197,33 @@ def set_agent_state(
 
 # ── Memory entries ───────────────────────────────────────────────────────────
 
+def _find_duplicate(conn: sqlite3.Connection, vec: list[float], agent_name: str,
+                    type_: str, threshold: float) -> dict[str, Any] | None:
+    """Nearest existing non-archived memory of the SAME (agent, type) with cosine
+    >= threshold, or None. KNN is sorted by ascending distance (descending cosine),
+    so we can stop at the first below-threshold candidate."""
+    try:
+        knn = conn.execute(
+            "SELECT memory_id, distance FROM memory_vec WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+            (_pack(vec), 5),
+        ).fetchall()
+    except Exception:
+        return None
+    for r in knn:
+        sim = max(0.0, 1.0 - (r["distance"] * r["distance"]) / 2.0)
+        if sim < threshold:
+            break
+        row = conn.execute(
+            "SELECT * FROM memories WHERE id = ? AND is_archived = 0 AND agent_name = ? AND type = ?",
+            (r["memory_id"], agent_name, type_),
+        ).fetchone()
+        if row:
+            d = dict(row)
+            d["_similarity"] = round(sim, 4)
+            return d
+    return None
+
+
 def save_memory(
     content: str,
     agent_name: str = "",
@@ -207,6 +241,16 @@ def save_memory(
     }
     vec = _embed((content + " " + category).strip())  # network call before the txn
     with _connect() as conn:
+        # Semantic dedup-on-write: a near-identical memory already exists -> return
+        # it instead of inserting a duplicate (store hygiene; never deletes).
+        if _DEDUP_ENABLED and vec is not None and _VEC_AVAILABLE:
+            dup = _find_duplicate(conn, vec, agent_name, type, _DEDUP_THRESHOLD)
+            if dup is not None:
+                sim = dup.pop("_similarity", None)
+                dup["embedded"] = True
+                dup["deduped"] = True
+                dup["similarity"] = sim
+                return dup
         conn.execute(
             """INSERT INTO memories (id, agent_name, type, content, category, is_archived, created_at)
                VALUES (:id, :agent_name, :type, :content, :category, :is_archived, :created_at)""",
