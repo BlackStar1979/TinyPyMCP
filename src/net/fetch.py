@@ -124,7 +124,7 @@ _DOCS_CACHE = _Path(os.environ["MCP_DOCS_CACHE"]) if os.environ.get("MCP_DOCS_CA
 
 class _DocText(_HTMLParser):
     """Lightweight HTML -> readable text (drops script/style/head; captures <title>)."""
-    _SKIP = {"script", "style", "noscript", "svg", "head", "nav", "footer"}
+    _SKIP = {"script", "style", "noscript", "svg", "nav", "footer"}
     _BREAK = {"p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "section", "article"}
 
     def __init__(self) -> None:
