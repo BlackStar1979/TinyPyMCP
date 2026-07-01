@@ -22,6 +22,8 @@ import math
 import os
 import sqlite3
 import struct
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +42,33 @@ _EMBED_DIM = int(os.environ.get("MCP_EMBED_DIM", "1024"))
 # context). Nothing is deleted — the original is returned. Needs embeddings+vec.
 _DEDUP_ENABLED = os.environ.get("MCP_MEMORY_DEDUP", "1").strip().lower() not in ("0", "false", "no", "off")
 _DEDUP_THRESHOLD = float(os.environ.get("MCP_MEMORY_DEDUP_THRESHOLD", "0.97"))
+
+# Embedding write-throttle: process-local min-interval gate so many concurrent
+# writers don't stampede the OVH provider (429). Rate 0 = disabled. If the needed
+# wait would exceed _EMBED_MAX_WAIT, the call skips embedding -> lexical fallback
+# (never blocks unbounded). Sync (consistent with the blocking httpx in _embed).
+_EMBED_RATE = float(os.environ.get("MCP_EMBED_RATE_PER_SEC", "8"))
+_EMBED_MAX_WAIT = float(os.environ.get("MCP_EMBED_MAX_WAIT_S", "2.0"))
+_embed_lock = threading.Lock()
+_last_embed = [0.0]  # monotonic ts of the last permitted embed (list = mutable cell)
+
+
+def _throttle_ok() -> bool:
+    """Min-interval rate gate. Returns False if the wait would exceed the cap
+    (caller degrades to lexical); otherwise sleeps the remainder and admits."""
+    if _EMBED_RATE <= 0:
+        return True
+    min_interval = 1.0 / _EMBED_RATE
+    with _embed_lock:
+        now = time.monotonic()
+        wait = _last_embed[0] + min_interval - now
+        if wait > _EMBED_MAX_WAIT:
+            return False
+        if wait > 0:
+            time.sleep(wait)
+            now = time.monotonic()
+        _last_embed[0] = now
+        return True
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_state (
@@ -119,6 +148,8 @@ def _embed(text: str) -> list[float] | None:
     """Embed text via OVH bge-m3 (L2-normalized so vec0 L2 ~ cosine). None on any
     failure (no key / network / wrong dim) -> caller degrades to lexical."""
     if not _EMBED_ENABLED or not text:
+        return None
+    if not _throttle_ok():  # over the rate cap -> degrade to lexical, never block unbounded
         return None
     try:
         from src import ovh_ai_client
