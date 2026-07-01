@@ -47,7 +47,7 @@ _DEDUP_THRESHOLD = float(os.environ.get("MCP_MEMORY_DEDUP_THRESHOLD", "0.97"))
 # writers don't stampede the OVH provider (429). Rate 0 = disabled. If the needed
 # wait would exceed _EMBED_MAX_WAIT, the call skips embedding -> lexical fallback
 # (never blocks unbounded). Sync (consistent with the blocking httpx in _embed).
-_EMBED_RATE = float(os.environ.get("MCP_EMBED_RATE_PER_SEC", "8"))
+_EMBED_RATE = float(os.environ.get("MCP_EMBED_RATE_PER_SEC", "6"))  # 6/s=360/min < OVH 400/min cap
 _EMBED_MAX_WAIT = float(os.environ.get("MCP_EMBED_MAX_WAIT_S", "2.0"))
 _embed_lock = threading.Lock()
 _last_embed = [0.0]  # monotonic ts of the last permitted embed (list = mutable cell)
