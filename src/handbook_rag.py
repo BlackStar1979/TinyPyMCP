@@ -251,12 +251,15 @@ def _fts_query(query: str) -> str:
 
 
 def search(query: str, embed_batch: EmbedBatch, *, top_k: int = 5,
-           layer: str = "", maturity: str = "", k_rrf: int = 60,
+           layer: str = "", maturity: str = "", k_rrf: int = 10,
+           w_dense: float = 2.0, w_lexical: float = 1.0,
            candidates: int = 50) -> dict[str, Any]:
     """Hybrid retrieval: local FTS5 (lexical) + vec0 dense (OVH-embedded query),
-    fused with Reciprocal Rank Fusion (two-stage: collect candidate slugs per lane,
-    fuse in Python, then fetch rows — sidesteps the vec0 JOIN+WHERE limitation).
-    Returns ranked cards with per-lane signals (decision-with-audit)."""
+    fused with WEIGHTED Reciprocal Rank Fusion (two-stage: collect candidate slugs
+    per lane, fuse in Python, then fetch rows — sidesteps the vec0 JOIN+WHERE limit).
+    Defaults (w_dense=2, w_lexical=1, k_rrf=10) are eval-tuned on 98 intent queries
+    (scripts/eval_handbook.py): beat equal-RRF on top1/recall@5/mrr. Dense dominates;
+    lexical is a supporting recall signal. Returns per-lane signals (decision-with-audit)."""
     with _connect() as conn:
         lexical: list[str] = []
         fq = _fts_query(query)
@@ -281,9 +284,9 @@ def search(query: str, embed_batch: EmbedBatch, *, top_k: int = 5,
 
         scores: dict[str, float] = {}
         for rank, slug in enumerate(lexical):
-            scores[slug] = scores.get(slug, 0.0) + 1.0 / (k_rrf + rank + 1)
+            scores[slug] = scores.get(slug, 0.0) + w_lexical / (k_rrf + rank + 1)
         for rank, slug in enumerate(dense):
-            scores[slug] = scores.get(slug, 0.0) + 1.0 / (k_rrf + rank + 1)
+            scores[slug] = scores.get(slug, 0.0) + w_dense / (k_rrf + rank + 1)
         if not scores:
             return {"ok": True, "mode": "hybrid", "results": [],
                     "lexical_n": len(lexical), "dense_n": len(dense)}
