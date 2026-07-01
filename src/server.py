@@ -726,7 +726,10 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
                 raw = resp.read()
             d = tempfile.mkdtemp(prefix="hbrag_")
             with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
-                tf.extractall(d)  # trusted source (our private repo)
+                try:
+                    tf.extractall(d, filter="data")   # py3.12+ safe extraction
+                except TypeError:
+                    tf.extractall(d)                  # older python fallback
             root = next((_os.path.join(d, x) for x in _os.listdir(d)
                          if _os.path.isdir(_os.path.join(d, x))), d)
             cards = hbrag.cards_from_dir(_os.path.join(root, "02_TECHNIQUE_CARDS"))

@@ -29,6 +29,7 @@ services:
       # Datastores OUTSIDE the workspace root → unreachable by file tools.
       MCP_OAUTH_DB: /data/oauth.db
       MCP_MEMORY_DB: /data/memory.db
+      MCP_HANDBOOK_DB: /data/handbook_rag.db
       MCP_AUDIT_LOG: /data/logs/.tinypymcp-audit.jsonl
       # Cloud creds by reference (read-only mount below); never arguments.
       MCP_CF_CONFIG: /secrets/cloudflare.json
