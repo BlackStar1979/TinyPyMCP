@@ -309,6 +309,53 @@ def search(query: str, embed_batch: EmbedBatch, *, top_k: int = 5,
             "lexical_n": len(lexical), "dense_n": len(dense)}
 
 
+def parse_card(text: str) -> tuple[Optional[dict[str, Any]], str]:
+    """Split a card into (frontmatter dict, body). Minimal YAML: top-level
+    `key: value` and inline `key: [a, b]` lists; nested blocks (related:) skipped."""
+    m = _re.match(r"^---\n(.*?)\n---\n(.*)$", text, _re.S)
+    if not m:
+        return None, ""
+    fm: dict[str, Any] = {}
+    for line in m.group(1).splitlines():
+        mm = _re.match(r"^([a-z_]+):\s*(.*)$", line)
+        if not mm:
+            continue
+        k, v = mm.group(1), mm.group(2).strip()
+        if v.startswith("[") and v.endswith("]"):
+            fm[k] = [x.strip().strip("\"'") for x in v[1:-1].split(",") if x.strip()]
+        else:
+            fm[k] = v.strip("\"'")
+    return fm, m.group(2)
+
+
+def _body_field(body: str, label: str) -> str:
+    mm = _re.search(r"^\s*" + label + r":\s*(.+?)(?:\n\n|\Z)", body, _re.S | _re.M)
+    return " ".join(mm.group(1).split()) if mm else ""
+
+
+def cards_from_dir(cards_dir: str) -> list[dict[str, Any]]:
+    """Parse every frontmattered technique card in a directory into ingest dicts.
+    `problem` = Sedno + Problem lines from the body (embedding-input signal)."""
+    import glob
+    import os
+    out: list[dict[str, Any]] = []
+    for p in sorted(glob.glob(os.path.join(cards_dir, "*.md"))):
+        if os.path.basename(p) == "000_CARD_TEMPLATE.md":
+            continue
+        fm, body = parse_card(Path(p).read_text(encoding="utf-8"))
+        if not fm or not fm.get("id"):
+            continue
+        problem = (_body_field(body, "Sedno") + " " + _body_field(body, "Problem")).strip()
+        out.append({
+            "slug": fm["id"], "title": fm.get("title", ""), "layer": fm.get("layer", ""),
+            "maturity": fm.get("maturity", ""), "card_type": fm.get("card_type", "technika"),
+            "language": fm.get("language", "pl"), "aliases": fm.get("aliases", []),
+            "triggers": fm.get("triggers", []), "anti_triggers": fm.get("anti_triggers", []),
+            "source_path": os.path.basename(p), "problem": problem, "body": body.strip(),
+        })
+    return out
+
+
 def stats() -> dict[str, Any]:
     with _connect() as conn:
         active = conn.execute("SELECT COUNT(*) c FROM cards WHERE status='active'").fetchone()["c"]

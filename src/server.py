@@ -698,6 +698,46 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
     @mcp.tool(
         annotations=ToolAnnotations(
+            title="Handbook: reindex from git",
+            readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    def handbook_reindex(
+        prune_missing: Annotated[bool, Field(description="Tombstone cards no longer present in the repo (full sync).")] = True,
+    ) -> dict[str, Any]:
+        """Pull the technique cards from the handbook git repo (private; token from
+        secrets), parse frontmatter, and incrementally ingest — re-embeds only cards
+        whose controlled embedding-input changed (hash-skip). First-class re-index:
+        run after card edits/enrichment instead of a manual ingest."""
+        import io
+        import json as _json
+        import os as _os
+        import tarfile
+        import tempfile
+        import urllib.request
+        try:
+            cfg = _json.load(open(_os.environ.get("MCP_GITHUB_CONFIG", "/secrets/github.json")))
+            tok = cfg.get("token")
+            owner = cfg.get("owner", "BlackStar1979")
+            url = f"https://api.github.com/repos/{owner}/autonomous-llm-handbook/tarball/main"
+            req = urllib.request.Request(
+                url, headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                raw = resp.read()
+            d = tempfile.mkdtemp(prefix="hbrag_")
+            with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
+                tf.extractall(d)  # trusted source (our private repo)
+            root = next((_os.path.join(d, x) for x in _os.listdir(d)
+                         if _os.path.isdir(_os.path.join(d, x))), d)
+            cards = hbrag.cards_from_dir(_os.path.join(root, "02_TECHNIQUE_CARDS"))
+        except Exception as e:
+            return {"ok": False, "error": f"pull/parse failed: {e}"}
+        res = hbrag.ingest(cards, _hb_embed_batch, prune_missing=prune_missing)
+        res["parsed"] = len(cards)
+        return res
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
             title="Memory: search",
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
         )
