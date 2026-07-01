@@ -110,14 +110,17 @@ def build_embedding_input(card: dict[str, Any]) -> str:
     def _lst(k: str) -> str:
         v = card.get(k) or []
         return "; ".join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v)
+    # triggers/anti_triggers are DELIBERATELY excluded from the dense input: the
+    # eval harness (scripts/eval_handbook.py) showed that embedding them dilutes the
+    # card's core identity and drops top1 (-2pp) while only helping recall. They live
+    # in the FTS/lexical lane instead (cards_fts) — that keeps recall (+5pp) without
+    # the top1 penalty. Dense stays on the card's identity: title/aliases/layer/problem.
     parts = [
         f"Title: {card.get('title', '')}",
         f"Aliases: {_lst('aliases')}",
         f"Layer: {card.get('layer', '')}",
         f"Maturity: {card.get('maturity', '')}",
         f"Problem: {card.get('problem', '')}",
-        f"When to use: {_lst('triggers')}",
-        f"Do not use when: {_lst('anti_triggers')}",
     ]
     return "\n".join(parts).strip()
 
