@@ -1,0 +1,255 @@
+"""
+TinyPyMCP — handbook RAG store (SEPARATE from agent memory).
+
+A dedicated, incrementally-maintained retrieval index over the autonomous-LLM
+handbook's technique cards. Kept apart from the agent memory store on purpose:
+~100+ prose cards must not pollute operational agent memory.
+
+Design (per 3 architecture consultations + OVH verification):
+  * chunk identity = the card's stable `slug` (frontmatter id), NOT position/hash.
+  * `embedding_input_hash` (over the CONTROLLED embed text) drives re-embed: a card
+    is re-embedded ONLY when this hash changes; a pure metadata edit does not.
+  * `content_hash` (whole card) = change detection for the ingest delta.
+  * hybrid retrieval: dense (OVH bge-m3, dense-only) + lexical (local SQLite FTS5)
+    fused; OVH gives no sparse, so lexical is built locally.
+  * tombstone (status='tombstoned') instead of hard-delete; retrieval filters active.
+
+The embedder is INJECTED (`embed_batch`) so the store is pure and testable without
+network/sqlite-vec; the OVH wiring lives in the server layer.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sqlite3
+import struct
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Optional, Sequence
+
+_DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "handbook_rag.db"
+DB_PATH = Path(os.environ.get("MCP_HANDBOOK_DB", str(_DEFAULT_DB)))
+_EMBED_DIM = int(os.environ.get("MCP_EMBED_DIM", "1024"))
+
+# embed_batch(texts) -> list of (vec | None), same length/order as texts.
+EmbedBatch = Callable[[Sequence[str]], list[Optional[list[float]]]]
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS cards (
+    slug                 TEXT PRIMARY KEY,       -- frontmatter id (stable chunk_id)
+    title                TEXT NOT NULL DEFAULT '',
+    layer                TEXT NOT NULL DEFAULT '',
+    maturity             TEXT NOT NULL DEFAULT '',
+    card_type            TEXT NOT NULL DEFAULT 'technika',
+    language             TEXT NOT NULL DEFAULT 'pl',
+    aliases              TEXT NOT NULL DEFAULT '[]',   -- JSON array
+    triggers             TEXT NOT NULL DEFAULT '[]',
+    anti_triggers        TEXT NOT NULL DEFAULT '[]',
+    source_path          TEXT NOT NULL DEFAULT '',
+    display_text         TEXT NOT NULL DEFAULT '',     -- raw card body (for the reader)
+    retrieval_text       TEXT NOT NULL DEFAULT '',     -- controlled text that was embedded
+    content_hash         TEXT NOT NULL DEFAULT '',
+    embedding_input_hash TEXT NOT NULL DEFAULT '',
+    status               TEXT NOT NULL DEFAULT 'active', -- active | tombstoned
+    updated_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cards_status ON cards(status, layer, maturity);
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+    slug UNINDEXED, title, aliases, triggers, anti_triggers, body,
+    tokenize = 'unicode61'
+);
+"""
+
+_VEC_AVAILABLE: bool | None = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _pack(v: list[float]) -> bytes:
+    return struct.pack(f"{len(v)}f", *v)
+
+
+def _load_vec(conn: sqlite3.Connection) -> bool:
+    global _VEC_AVAILABLE
+    try:
+        import sqlite_vec
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS cards_vec "
+            f"USING vec0(slug TEXT, embedding FLOAT[{_EMBED_DIM}])"
+        )
+        _VEC_AVAILABLE = True
+    except Exception:
+        _VEC_AVAILABLE = False
+    return bool(_VEC_AVAILABLE)
+
+
+def _connect() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.executescript(_SCHEMA)
+    _load_vec(conn)
+    return conn
+
+
+def build_embedding_input(card: dict[str, Any]) -> str:
+    """Controlled text fed to the embedder (NOT raw markdown). Metadata-semantic:
+    the fields that carry retrieval meaning, in a stable order. Changing this
+    template changes every card's embedding_input_hash (intentional full re-embed)."""
+    def _lst(k: str) -> str:
+        v = card.get(k) or []
+        return "; ".join(str(x) for x in v) if isinstance(v, (list, tuple)) else str(v)
+    parts = [
+        f"Title: {card.get('title', '')}",
+        f"Aliases: {_lst('aliases')}",
+        f"Layer: {card.get('layer', '')}",
+        f"Maturity: {card.get('maturity', '')}",
+        f"Problem: {card.get('problem', '')}",
+        f"When to use: {_lst('triggers')}",
+        f"Do not use when: {_lst('anti_triggers')}",
+    ]
+    return "\n".join(parts).strip()
+
+
+def _card_row(card: dict[str, Any], retrieval_text: str) -> dict[str, Any]:
+    return {
+        "slug": card["slug"],
+        "title": card.get("title", ""),
+        "layer": card.get("layer", ""),
+        "maturity": card.get("maturity", ""),
+        "card_type": card.get("card_type", "technika"),
+        "language": card.get("language", "pl"),
+        "aliases": json.dumps(card.get("aliases") or [], ensure_ascii=False),
+        "triggers": json.dumps(card.get("triggers") or [], ensure_ascii=False),
+        "anti_triggers": json.dumps(card.get("anti_triggers") or [], ensure_ascii=False),
+        "source_path": card.get("source_path", ""),
+        "display_text": card.get("body", ""),
+        "retrieval_text": retrieval_text,
+        "content_hash": _sha(json.dumps(card, sort_keys=True, ensure_ascii=False, default=str)),
+        "embedding_input_hash": _sha(retrieval_text),
+        "status": "active",
+        "updated_at": _now(),
+    }
+
+
+def _fts_delete(conn: sqlite3.Connection, slug: str) -> None:
+    conn.execute("DELETE FROM cards_fts WHERE slug = ?", (slug,))
+
+
+def _fts_insert(conn: sqlite3.Connection, row: dict[str, Any], card: dict[str, Any]) -> None:
+    conn.execute(
+        "INSERT INTO cards_fts (slug, title, aliases, triggers, anti_triggers, body) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (row["slug"], row["title"], " ".join(card.get("aliases") or []),
+         " ".join(card.get("triggers") or []), " ".join(card.get("anti_triggers") or []),
+         card.get("body", "")),
+    )
+
+
+def ingest(cards: list[dict[str, Any]], embed_batch: EmbedBatch,
+           *, prune_missing: bool = False, batch_size: int = 25) -> dict[str, Any]:
+    """Incremental upsert of cards keyed by slug. Re-embeds ONLY cards whose
+    embedding_input_hash changed (or new). `prune_missing` tombstones active cards
+    whose slug is absent from `cards` (full-corpus sync). Returns counts."""
+    seen: set[str] = set()
+    to_embed: list[tuple[dict[str, Any], dict[str, Any]]] = []  # (row, card)
+    inserted = updated = unchanged = 0
+    with _connect() as conn:
+        for card in cards:
+            slug = card.get("slug")
+            if not slug:
+                continue
+            seen.add(slug)
+            rt = build_embedding_input(card)
+            row = _card_row(card, rt)
+            prev = conn.execute(
+                "SELECT embedding_input_hash, content_hash FROM cards WHERE slug = ?", (slug,)
+            ).fetchone()
+            if prev is None:
+                inserted += 1
+                _upsert_card(conn, row)
+                _fts_delete(conn, slug)
+                _fts_insert(conn, row, card)
+                to_embed.append((row, card))
+            elif prev["embedding_input_hash"] != row["embedding_input_hash"]:
+                updated += 1
+                _upsert_card(conn, row)
+                _fts_delete(conn, slug)
+                _fts_insert(conn, row, card)
+                to_embed.append((row, card))
+            elif prev["content_hash"] != row["content_hash"]:
+                # metadata/body changed but embed input identical -> refresh row+FTS, NO re-embed
+                updated += 1
+                _upsert_card(conn, row)
+                _fts_delete(conn, slug)
+                _fts_insert(conn, row, card)
+            else:
+                unchanged += 1
+
+        embedded = 0
+        if to_embed and _VEC_AVAILABLE:
+            for i in range(0, len(to_embed), max(1, batch_size)):
+                chunk = to_embed[i:i + batch_size]
+                vecs = embed_batch([r["retrieval_text"] for r, _ in chunk])
+                for (row, _), vec in zip(chunk, vecs):
+                    if vec is None:
+                        continue
+                    conn.execute("DELETE FROM cards_vec WHERE slug = ?", (row["slug"],))
+                    conn.execute("INSERT INTO cards_vec (slug, embedding) VALUES (?, ?)",
+                                 (row["slug"], _pack(vec)))
+                    embedded += 1
+
+        tombstoned = 0
+        if prune_missing:
+            active = conn.execute("SELECT slug FROM cards WHERE status='active'").fetchall()
+            for r in active:
+                if r["slug"] not in seen:
+                    conn.execute("UPDATE cards SET status='tombstoned', updated_at=? WHERE slug=?",
+                                 (_now(), r["slug"]))
+                    _fts_delete(conn, r["slug"])
+                    if _VEC_AVAILABLE:
+                        conn.execute("DELETE FROM cards_vec WHERE slug = ?", (r["slug"],))
+                    tombstoned += 1
+        conn.commit()
+    return {"ok": True, "inserted": inserted, "updated": updated, "unchanged": unchanged,
+            "embedded": embedded, "tombstoned": tombstoned, "vec_available": bool(_VEC_AVAILABLE)}
+
+
+def _upsert_card(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+    cols = ",".join(row.keys())
+    ph = ",".join(f":{k}" for k in row)
+    setc = ",".join(f"{k}=excluded.{k}" for k in row if k != "slug")
+    conn.execute(
+        f"INSERT INTO cards ({cols}) VALUES ({ph}) "
+        f"ON CONFLICT(slug) DO UPDATE SET {setc}",
+        row,
+    )
+
+
+def stats() -> dict[str, Any]:
+    with _connect() as conn:
+        active = conn.execute("SELECT COUNT(*) c FROM cards WHERE status='active'").fetchone()["c"]
+        tomb = conn.execute("SELECT COUNT(*) c FROM cards WHERE status='tombstoned'").fetchone()["c"]
+        embedded = 0
+        if _VEC_AVAILABLE:
+            try:
+                embedded = conn.execute("SELECT COUNT(*) c FROM cards_vec").fetchone()["c"]
+            except Exception:
+                embedded = 0
+        by_layer = {r["layer"] or "?": r["c"] for r in conn.execute(
+            "SELECT layer, COUNT(*) c FROM cards WHERE status='active' GROUP BY layer ORDER BY c DESC"
+        ).fetchall()}
+    return {"ok": True, "active": active, "tombstoned": tomb, "embedded": embedded,
+            "embed_coverage": round(embedded / active, 3) if active else 0.0,
+            "by_layer": by_layer, "vec_available": bool(_VEC_AVAILABLE)}
