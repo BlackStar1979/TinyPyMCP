@@ -599,6 +599,21 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
     @mcp.tool(
         annotations=ToolAnnotations(
+            title="Memory: behavioral drift",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def memory_drift(
+        agent_name: Annotated[str, Field(description="Agent whose memories to measure. Omit for all.", max_length=64)] = "",
+        limit: Annotated[int, Field(description="How many recent embedded memories to span.", ge=2, le=500)] = 50,
+    ) -> dict[str, Any]:
+        """Behavioral-drift proxy: mean cosine DISTANCE between consecutive (by time)
+        embedded memories of an agent (0 = no drift, higher = content moving apart).
+        A thread-health signal for the shared store. Needs sqlite-vec + embeddings."""
+        return mem.behavioral_drift(agent_name, limit)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
             title="Memory: search",
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
         )

@@ -437,6 +437,52 @@ def stats() -> dict[str, Any]:
     }
 
 
+def behavioral_drift(agent_name: str = "", limit: int = 50) -> dict[str, Any]:
+    """Behavioral-drift proxy (LAB `behavioral_drift_rate`, simplified): mean cosine
+    DISTANCE between consecutive (by time) embedded memories of an agent. 0 = no
+    drift; higher = the agent's recorded content is moving apart over time. Uses
+    sqlite-vec `vec_distance_cosine` on the stored vectors (no blob unpacking).
+    Read-only; needs sqlite-vec + embeddings."""
+    limit = max(2, min(int(limit), 500))
+    with _connect() as conn:
+        if not _VEC_AVAILABLE:
+            return {"ok": False, "error": "sqlite-vec not available in this build"}
+        q = ("SELECT m.id FROM memories m JOIN memory_vec v ON v.memory_id = m.id "
+             "WHERE m.is_archived = 0")
+        params: list[Any] = []
+        if agent_name:
+            q += " AND m.agent_name = ?"
+            params.append(agent_name)
+        q += " ORDER BY m.created_at ASC LIMIT ?"
+        params.append(limit)
+        ids = [r["id"] for r in conn.execute(q, params).fetchall()]
+        if len(ids) < 2:
+            return {"ok": True, "pairs": 0, "drift_mean": None, "window": len(ids),
+                    "note": "need >= 2 embedded memories"}
+        dists: list[float] = []
+        for a, b in zip(ids, ids[1:]):
+            row = conn.execute(
+                "SELECT vec_distance_cosine("
+                "(SELECT embedding FROM memory_vec WHERE memory_id = ?),"
+                "(SELECT embedding FROM memory_vec WHERE memory_id = ?)) AS d",
+                (a, b),
+            ).fetchone()
+            if row is not None and row["d"] is not None:
+                dists.append(float(row["d"]))
+    if not dists:
+        return {"ok": True, "pairs": 0, "drift_mean": None, "window": len(ids)}
+    mean_d = sum(dists) / len(dists)
+    return {
+        "ok": True,
+        "agent_name": agent_name or "(all)",
+        "window": len(ids),
+        "pairs": len(dists),
+        "drift_mean": round(mean_d, 4),                  # cosine distance [0..2]
+        "drift_max": round(max(dists), 4),
+        "similarity_mean": round(1.0 - mean_d / 2.0, 4),  # [0..1], 1 = no drift
+    }
+
+
 # ── ADR-as-memory (architectural decisions as first-class, searchable memory) ─
 
 def save_adr(
