@@ -21,7 +21,7 @@ READ_ONLY = {
     "search_codebase", "get_project_structure", "get_info", "list_trash",
     "code_dependencies", "code_impact", "code_symbols", "search_index", "index_status",
     "http_probe", "check_npm_package", "check_pypi_package",
-    "memory_get_state", "memory_search", "memory_get_tasks",
+    "memory_get_state", "memory_search", "memory_get_tasks", "memory_stats",
     "vps_status", "cf_verify_token", "cf_list_dns", "cf_list_tunnels", "cf_get_tunnel_config",
     "ovh_vps_info", "ovh_snapshot_status", "ovh_automated_backup_status", "ovh_images_available",
     "kuma_list_monitors", "kuma_monitor_status",

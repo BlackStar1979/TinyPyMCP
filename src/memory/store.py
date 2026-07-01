@@ -399,6 +399,44 @@ def reindex_embeddings(agent_name: str = "", limit: int = 1000) -> dict[str, Any
     return {"ok": True, "indexed": indexed, "failed": failed, "candidates": len(rows)}
 
 
+def stats() -> dict[str, Any]:
+    """Read-only health snapshot of the shared memory store: counts (total /
+    active / archived), embedding coverage, breakdown by type and top agents,
+    and the hygiene config (dedup, embed rate). Pure COUNTs — cheap, safe."""
+    with _connect() as conn:
+        total = conn.execute("SELECT COUNT(*) c FROM memories").fetchone()["c"]
+        active = conn.execute("SELECT COUNT(*) c FROM memories WHERE is_archived=0").fetchone()["c"]
+        by_type = {r["type"]: r["c"] for r in conn.execute(
+            "SELECT type, COUNT(*) c FROM memories WHERE is_archived=0 GROUP BY type ORDER BY c DESC"
+        ).fetchall()}
+        by_agent = {(r["agent_name"] or "(none)"): r["c"] for r in conn.execute(
+            "SELECT agent_name, COUNT(*) c FROM memories WHERE is_archived=0 "
+            "GROUP BY agent_name ORDER BY c DESC LIMIT 20"
+        ).fetchall()}
+        embedded = 0
+        if _VEC_AVAILABLE:
+            try:
+                embedded = conn.execute("SELECT COUNT(*) c FROM memory_vec").fetchone()["c"]
+            except Exception:
+                embedded = 0
+        tasks = conn.execute("SELECT COUNT(*) c FROM tasks").fetchone()["c"]
+    return {
+        "ok": True,
+        "memories_total": total,
+        "memories_active": active,
+        "memories_archived": total - active,
+        "embedded": embedded,
+        "embed_coverage": round(embedded / active, 3) if active else 0.0,
+        "vec_available": bool(_VEC_AVAILABLE),
+        "by_type": by_type,
+        "by_agent": by_agent,
+        "tasks": tasks,
+        "dedup_enabled": _DEDUP_ENABLED,
+        "dedup_threshold": _DEDUP_THRESHOLD,
+        "embed_rate_per_sec": _EMBED_RATE,
+    }
+
+
 # ── ADR-as-memory (architectural decisions as first-class, searchable memory) ─
 
 def save_adr(

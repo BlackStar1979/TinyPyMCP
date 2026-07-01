@@ -587,6 +587,18 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
     @mcp.tool(
         annotations=ToolAnnotations(
+            title="Memory: store stats",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def memory_stats() -> dict[str, Any]:
+        """Health snapshot of the shared memory store: total/active/archived counts,
+        embedding coverage, breakdown by type + top agents, and hygiene config
+        (dedup threshold, embed rate). Read-only observability for the shared store."""
+        return mem.stats()
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
             title="Memory: search",
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
         )
