@@ -483,6 +483,65 @@ def behavioral_drift(agent_name: str = "", limit: int = 50) -> dict[str, Any]:
     }
 
 
+def summarize(agent_name: str = "", category: str = "", limit: int = 30,
+              archive_source: bool = False) -> dict[str, Any]:
+    """Compress many raw memories into one distilled 'gist' (CoALA Semantic).
+    Fetches up to `limit` active non-summary memories (agent/category filter,
+    oldest->newest), asks the OVH chat model to summarize, and saves the result
+    as a new memory (type='summary'). With archive_source=True the summarized
+    sources are archived (real compression of the shared thread)."""
+    limit = max(2, min(int(limit), 100))
+    with _connect() as conn:
+        q = ("SELECT id, content FROM memories "
+             "WHERE is_archived = 0 AND type != 'summary'")
+        params: list[Any] = []
+        if agent_name:
+            q += " AND agent_name = ?"
+            params.append(agent_name)
+        if category:
+            q += " AND category = ?"
+            params.append(category)
+        q += " ORDER BY created_at ASC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(q, params).fetchall()
+    if len(rows) < 2:
+        return {"ok": True, "summarized": 0, "note": "need >= 2 memories to summarize"}
+    joined = "\n".join(f"- {r['content']}" for r in rows)
+    try:
+        from src import ovh_ai_client
+        res = ovh_ai_client.chat(
+            [
+                {"role": "system", "content": "Jesteś skrupulatnym archiwistą. Streść poniższe "
+                 "notatki pamięci w zwięzły gist: kluczowe fakty, bez powtórzeń, zachowaj "
+                 "konkrety (nazwy, liczby, decyzje). Zwróć sam gist."},
+                {"role": "user", "content": joined},
+            ],
+            max_tokens=600,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"chat failed: {e}"}
+    if not res.get("ok") or not res.get("content"):
+        return {"ok": False, "error": res.get("error") or "no summary content"}
+    gist = str(res["content"]).strip()
+    entry = save_memory(gist, agent_name=agent_name, type="summary", category=category or "gist")
+    archived = 0
+    if archive_source:
+        ids = [r["id"] for r in rows]
+        with _connect() as conn:
+            ph = ",".join("?" * len(ids))
+            conn.execute(f"UPDATE memories SET is_archived = 1 WHERE id IN ({ph})", ids)
+            conn.commit()
+        archived = len(ids)
+    return {
+        "ok": True,
+        "summarized": len(rows),
+        "archived_sources": archived,
+        "summary_id": entry.get("id"),
+        "summary": gist,
+        "model": res.get("model"),
+    }
+
+
 # ── ADR-as-memory (architectural decisions as first-class, searchable memory) ─
 
 def save_adr(

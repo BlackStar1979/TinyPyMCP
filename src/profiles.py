@@ -39,7 +39,7 @@ OPERATOR_ADMIN = {
     "safe_replace_in_line", "edit_code_block", "write_file", "create_file", "append_file",
     "copy_path", "move_path", "delete_path", "edit_file_patch", "restore_path",
     "build_index", "run_command", "clone_repo",
-    "memory_set_state", "memory_save", "memory_create_task", "memory_reindex",
+    "memory_set_state", "memory_save", "memory_create_task", "memory_reindex", "memory_summarize",
     "vps_request", "vps_docker",
     # write-side of newer tooling (were registered but stale-pruned)
     "download_docs", "memory_save_adr", "sim_submit_job", "sim_register_artifact",

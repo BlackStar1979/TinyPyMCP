@@ -614,6 +614,23 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
 
     @mcp.tool(
         annotations=ToolAnnotations(
+            title="Memory: summarize (gist)",
+            readOnlyHint=False, idempotentHint=False, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    def memory_summarize(
+        agent_name: Annotated[str, Field(description="Summarize this agent's memories. Omit for all.", max_length=64)] = "",
+        category: Annotated[str, Field(description="Restrict to one category. Omit for all.", max_length=64)] = "",
+        limit: Annotated[int, Field(description="How many recent memories to fold into the gist.", ge=2, le=100)] = 30,
+        archive_source: Annotated[bool, Field(description="Archive the summarized source memories (real compression). Default keeps them.")] = False,
+    ) -> dict[str, Any]:
+        """Compress many raw memories into one distilled gist (CoALA Semantic memory,
+        saved as type='summary' via the OVH chat model). Optionally archives the
+        sources. Compression brick for the shared long-term thread."""
+        return mem.summarize(agent_name, category, limit, archive_source)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
             title="Memory: search",
             readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
         )
