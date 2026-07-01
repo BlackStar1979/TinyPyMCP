@@ -237,6 +237,78 @@ def _upsert_card(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
     )
 
 
+import re as _re
+
+
+def _fts_query(query: str) -> str:
+    """Sanitize a natural-language query into a safe FTS5 OR-query (recall-first).
+    Avoids FTS5 special-syntax errors on raw user input."""
+    toks = _re.findall(r"\w+", query.lower(), _re.UNICODE)
+    return " OR ".join(toks) if toks else ""
+
+
+def search(query: str, embed_batch: EmbedBatch, *, top_k: int = 5,
+           layer: str = "", maturity: str = "", k_rrf: int = 60,
+           candidates: int = 50) -> dict[str, Any]:
+    """Hybrid retrieval: local FTS5 (lexical) + vec0 dense (OVH-embedded query),
+    fused with Reciprocal Rank Fusion (two-stage: collect candidate slugs per lane,
+    fuse in Python, then fetch rows — sidesteps the vec0 JOIN+WHERE limitation).
+    Returns ranked cards with per-lane signals (decision-with-audit)."""
+    with _connect() as conn:
+        lexical: list[str] = []
+        fq = _fts_query(query)
+        if fq:
+            try:
+                lexical = [r["slug"] for r in conn.execute(
+                    "SELECT slug FROM cards_fts WHERE cards_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (fq, candidates)).fetchall()]
+            except Exception:
+                lexical = []
+
+        dense: list[str] = []
+        if _VEC_AVAILABLE:
+            qv = embed_batch([query])[0] if query else None
+            if qv is not None:
+                try:
+                    dense = [r["slug"] for r in conn.execute(
+                        "SELECT slug, distance FROM cards_vec WHERE embedding MATCH ? AND k = ? "
+                        "ORDER BY distance", (_pack(qv), candidates)).fetchall()]
+                except Exception:
+                    dense = []
+
+        scores: dict[str, float] = {}
+        for rank, slug in enumerate(lexical):
+            scores[slug] = scores.get(slug, 0.0) + 1.0 / (k_rrf + rank + 1)
+        for rank, slug in enumerate(dense):
+            scores[slug] = scores.get(slug, 0.0) + 1.0 / (k_rrf + rank + 1)
+        if not scores:
+            return {"ok": True, "mode": "hybrid", "results": [],
+                    "lexical_n": len(lexical), "dense_n": len(dense)}
+
+        lex_set, den_set = set(lexical), set(dense)
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        out: list[dict[str, Any]] = []
+        for slug, sc in ranked:
+            r = conn.execute(
+                "SELECT slug, title, layer, maturity, card_type, display_text "
+                "FROM cards WHERE slug = ? AND status = 'active'", (slug,)).fetchone()
+            if r is None:
+                continue
+            if layer and r["layer"] != layer:
+                continue
+            if maturity and r["maturity"] != maturity:
+                continue
+            e = dict(r)
+            e["score"] = round(sc, 5)
+            e["in_lexical"] = slug in lex_set
+            e["in_dense"] = slug in den_set
+            out.append(e)
+            if len(out) >= top_k:
+                break
+    return {"ok": True, "mode": "hybrid", "results": out,
+            "lexical_n": len(lexical), "dense_n": len(dense)}
+
+
 def stats() -> dict[str, Any]:
     with _connect() as conn:
         active = conn.execute("SELECT COUNT(*) c FROM cards WHERE status='active'").fetchone()["c"]

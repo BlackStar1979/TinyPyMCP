@@ -22,6 +22,7 @@ READ_ONLY = {
     "code_dependencies", "code_impact", "code_symbols", "search_index", "index_status",
     "http_probe", "check_npm_package", "check_pypi_package",
     "memory_get_state", "memory_search", "memory_get_tasks", "memory_stats", "memory_drift",
+    "handbook_search", "handbook_stats",
     "vps_status", "cf_verify_token", "cf_list_dns", "cf_list_tunnels", "cf_get_tunnel_config",
     "ovh_vps_info", "ovh_snapshot_status", "ovh_automated_backup_status", "ovh_images_available",
     "kuma_list_monitors", "kuma_monitor_status",
@@ -40,6 +41,7 @@ OPERATOR_ADMIN = {
     "copy_path", "move_path", "delete_path", "edit_file_patch", "restore_path",
     "build_index", "run_command", "clone_repo",
     "memory_set_state", "memory_save", "memory_create_task", "memory_reindex", "memory_summarize",
+    "handbook_ingest",
     "vps_request", "vps_docker",
     # write-side of newer tooling (were registered but stale-pruned)
     "download_docs", "memory_save_adr", "sim_submit_job", "sim_register_artifact",

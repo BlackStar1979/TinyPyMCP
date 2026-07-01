@@ -629,6 +629,73 @@ def create_server(stateless: bool = True, port: int = 8765, auth_mode: str = "be
         sources. Compression brick for the shared long-term thread."""
         return mem.summarize(agent_name, category, limit, archive_source)
 
+    # ── Handbook RAG (separate store; hybrid FTS5 + vec0-dense over technique cards) ──
+    from src import handbook_rag as hbrag
+    from src import ovh_ai_client as _ovhc
+
+    def _hb_embed_batch(texts):
+        """OVH bge-m3 batch embedder (≤25/request per OVH limit), L2-normalized so
+        vec0 L2 distance ~ cosine. Returns [vec|None] aligned with `texts`."""
+        import math
+        out: list = []
+        for i in range(0, len(texts), 25):
+            chunk = list(texts[i:i + 25])
+            r = _ovhc.embeddings(chunk)
+            vecs = r.get("embeddings") if r.get("ok") else None
+            if not vecs or len(vecs) != len(chunk):
+                out.extend([None] * len(chunk))
+                continue
+            for v in vecs:
+                if not v or len(v) != 1024:
+                    out.append(None)
+                    continue
+                n = math.sqrt(sum(x * x for x in v)) or 1.0
+                out.append([x / n for x in v])
+        return out
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Handbook: search technique cards",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    def handbook_search(
+        query: Annotated[str, Field(description="Natural-language description of the problem/technique you need.", min_length=2, max_length=512)],
+        top_k: Annotated[int, Field(description="How many cards to return.", ge=1, le=20)] = 5,
+        layer: Annotated[str, Field(description="Hard-filter to one layer (e.g. L7). Omit for all.", max_length=8)] = "",
+        maturity: Annotated[str, Field(description="Hard-filter to one maturity (A-D/X). Omit for all.", max_length=2)] = "",
+    ) -> dict[str, Any]:
+        """Hybrid retrieval over the handbook technique cards: local FTS5 lexical +
+        OVH bge-m3 dense, fused (RRF). Returns ranked cards with per-lane signals
+        (in_lexical/in_dense) so you can see WHY each was picked. The 'fishing' tool."""
+        return hbrag.search(query, _hb_embed_batch, top_k=top_k, layer=layer, maturity=maturity)
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Handbook: RAG store stats",
+            readOnlyHint=True, idempotentHint=True, destructiveHint=False, openWorldHint=False,
+        )
+    )
+    def handbook_stats() -> dict[str, Any]:
+        """Health snapshot of the handbook RAG index: active/tombstoned cards,
+        embedding coverage, breakdown by layer."""
+        return hbrag.stats()
+
+    @mcp.tool(
+        annotations=ToolAnnotations(
+            title="Handbook: ingest cards",
+            readOnlyHint=False, idempotentHint=True, destructiveHint=False, openWorldHint=True,
+        )
+    )
+    def handbook_ingest(
+        cards: Annotated[list, Field(description="List of card dicts (slug,title,layer,maturity,aliases,triggers,anti_triggers,problem,body,...). From the PC frontmatter extractor.")],
+        prune_missing: Annotated[bool, Field(description="Tombstone active cards whose slug is absent from this payload (full-corpus sync).")] = False,
+    ) -> dict[str, Any]:
+        """Incremental upsert of technique cards into the handbook RAG index. Re-embeds
+        only cards whose controlled embedding-input changed (hash-skip); tombstones
+        removed cards when prune_missing. Idempotent."""
+        return hbrag.ingest(list(cards), _hb_embed_batch, prune_missing=prune_missing)
+
     @mcp.tool(
         annotations=ToolAnnotations(
             title="Memory: search",
